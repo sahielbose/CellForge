@@ -15,7 +15,7 @@ setup(
     description="Agentic design of virtual cell models for single-cell perturbation data",
     long_description=(ROOT / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
-    url="https://github.com/gersteinlab/CellForge",
+    url="https://github.com/sahielbose/CellForge",
     license="MIT",
     packages=find_packages(include=["cellforge", "cellforge.*"]),
     py_modules=["main"],

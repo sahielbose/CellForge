@@ -1,6 +1,7 @@
 # What `pytest tests` needs. No LLM SDKs: tests use fakes.
 pytest>=7.0
 numpy>=1.24,<2.0
+scipy>=1.10
 anndata>=0.9
 h5py>=3.8
 requests>=2.31
