@@ -129,7 +129,7 @@ The original repository had the three phases, but several of them did not pass t
 | every dataset was described to the agents as K562, CRISPRi, scRNA-seq; analysts returned invented defaults (10,000 cells, 2,000 genes) when an LLM call failed | the dataset file is read, and a failed call is reported as an error |
 | Method Design kept keyword hits from the Task Analysis report and dropped its content | the full report reaches every expert |
 | the consensus score was the first decimal number in the critique text, shared by all experts | each expert gets critic and peer scores and the paper's update rule |
-| held-out perturbations were never scored; the only metric was the generated script's own number on a random cell split of training perturbations, and the control label could land in the held-out set | five perturbation folds, controls kept in training, scoring done by the harness with the paper's metrics and two baselines |
+| held-out perturbations were never scored; the only metric was the generated script's own number on a random cell split of training perturbations, and the control label could land in the held-out set | five perturbation folds, controls kept in training, scoring done by the harness with the paper's metrics and three baselines |
 | TLS verification was disabled for DeepSeek, Llama, Qwen and custom endpoints, prompts were logged, and generated code ran with API keys in its environment | verification on, no prompt logging, secrets removed from the environment of generated code |
 | `temperature=0` became 0.7, reasoning models rejected `max_tokens`, and chat calls kept only the last user message | fixed |
 
