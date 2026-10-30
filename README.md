@@ -1,301 +1,114 @@
-<div align="center">
+# CellForge
 
-# 🧬 CellForge
+CellForge is a multi-agent system that takes a single-cell perturbation dataset and a research question and returns a trained model with a score on perturbations it has never seen. It was introduced by Tang et al. in [*CellForge: Agentic Design of Virtual Cell Models*](https://arxiv.org/abs/2508.02276) from the Gerstein Lab at Yale. This repository is a rewrite of [gersteinlab/CellForge](https://github.com/gersteinlab/CellForge) in which each phase now consumes the previous phase's output, and every model is scored on held-out perturbations with the metric definitions from the paper's Methods.
 
-### Agentic design of virtual cell models
+[Paper](https://arxiv.org/abs/2508.02276) &nbsp;·&nbsp; [Results in the paper](docs/RESULTS.md) &nbsp;·&nbsp; [Datasets](docs/DATASETS.md) &nbsp;·&nbsp; [GPU benchmark plan](docs/EXPERIMENTS.md)
 
-**Give CellForge a single-cell dataset and a research question. It reads the literature, argues with itself until a group of expert agents converge on an architecture, writes the training code, and runs it.**
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figs/pipeline-dark.svg">
+  <img src="figs/pipeline.svg" alt="The three phases of CellForge: formulation, ideation and execution, each passing one file to the next.">
+</picture>
 
-[![arXiv](https://img.shields.io/badge/arXiv-2508.02276-b31b1b.svg?style=flat-square)](https://arxiv.org/abs/2508.02276)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-blue.svg?style=flat-square)](https://www.python.org/downloads/)
-[![CI](https://img.shields.io/github/actions/workflow/status/gersteinlab/CellForge/ci.yml?branch=main&style=flat-square&label=tests)](https://github.com/gersteinlab/CellForge/actions/workflows/ci.yml)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
-[![Stars](https://img.shields.io/github/stars/gersteinlab/CellForge?style=flat-square&color=gold)](https://github.com/gersteinlab/CellForge/stargazers)
+## How it works
 
-[**Quickstart**](#-quickstart-5-minutes) · [**What it designed**](#-what-cellforge-designed) · [**Benchmarks**](#-benchmarks) · [**Architecture**](#-architecture) · [**Docs**](docs/) · [**Paper**](https://arxiv.org/abs/2508.02276)
+### Formulation
 
-</div>
+The code is in `cellforge/Task_Analysis`. The dataset file is opened in backed mode and summarized: the perturbation column, the control labels, the number of perturbations and cells per perturbation, the modality and any cell line or organism annotation. Literature comes from a local PDF corpus plus PubMed, Crossref and Semantic Scholar, and every passage keeps an evidence ID. A dataset analyst, a problem investigator and a baseline assessor each write one section of the analysis, and a refinement agent reviews the three together, revises only the sections it flagged, stops early when it has nothing left to fix, and writes recommendations for the model designer.
 
----
+### Ideation
 
-## The one-minute version
+The code is in `cellforge/Method_Design`. A team of four experts (data engineering, single-cell biology, deep learning, training) is extended with specialists an LLM picks for the task. In each round every expert drafts or revises a proposal, a critic scores all proposals in one call, and each expert reviews the others. Each expert's coordination score follows the update in the paper,
 
-Building a virtual cell model is a months-long loop: read the perturbation-modeling literature, pick an architecture, adapt it to your assay, write the training code, debug the CUDA errors, tune, evaluate, repeat.
+$$c_t = 0.3\,c_{t-1} + 0.4\,\text{critic}_t + 0.3\,\overline{\text{peer}}_t ,$$
 
-CellForge collapses that loop into a single command.
+with reviews bounded to [0.1, 1.0] and every score starting at 0.5. The discussion stops once every score is at least 0.8 and no two differ by 0.03 or more. The critic then writes up the top-ranked proposal as the research plan, applying its open review points, and the other proposals are dropped, as the paper describes. If that call fails, the saved plan says so in its `plan_source` field.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figs/coordination-dark.svg">
+  <img src="figs/coordination.svg" width="640" alt="Coordination score over rounds for constant review scores of 1.0, 0.85 and 0.75.">
+</picture>
+
+Because the score moves 70% of the way toward the current reviews in each round, the 0.8 threshold amounts to requiring reviews that average at least 0.8. Reviews that settle at 0.75 never reach it, and the discussion runs to its cap, which is six rounds by default and up to the paper's twenty through `METHOD_DESIGN_MAX_ROUNDS`. In the other direction, a first round in which every review is 0.93 or higher ends the discussion before any expert has revised anything; `METHOD_DESIGN_MIN_ROUNDS` sets a minimum for anyone who wants to test whether revision helps.
+
+### Execution
+
+The code is in `cellforge/Code_Generation` and `cellforge/autorun`. The Codex CLI writes a training script for each task block of the plan. A verifier compiles it and checks that its `--help` lists the five flags the runner passes, and failures go back to Codex as a structured report for a bounded number of repairs. The runner then trains the script on one fold of the data, locally or through Slurm, and scores its predictions.
+
+## Evaluation
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figs/evaluation-dark.svg">
+  <img src="figs/evaluation.svg" alt="Perturbation identities are split into five folds; the generated script sees training data and test names, and the harness scores its predictions.">
+</picture>
+
+The split and the metrics follow the paper. Perturbation identities are shuffled once with a fixed seed and divided into five folds, and each run holds one fold out for testing, so a model is always scored on perturbations it did not train on. Control cells stay in training because every prediction is made relative to them. The generated script receives the training and validation files and the names of the test perturbations, and writes one predicted mean profile (log1p of counts per 10k) per test perturbation to `predictions.h5ad`. Test expression stays with the harness.
+
+For each held-out perturbation, `cellforge/autorun/scoring.py` compares mean profiles and reports MSE, PCC and R² over all genes, PCC on the change from control, and the same three metrics over the observed differentially expressed genes. That set is the top min(50, ⌊p/2⌋, p−1) genes by absolute t statistic against control cells, following Scanpy's `t-test_overestim_var`. It also reports Recall@50, the overlap between the observed set and the 50 genes with the largest predicted change, and the AUROC of the predicted change for membership in that set. The same metrics are computed for two reference predictors on the same perturbations, no change from control and the average shift seen across training perturbations, because a model that cannot beat the mean shift has not learned anything perturbation-specific. Scores are averaged per perturbation, and then across folds.
+
+## Results reported in the paper
+
+These numbers come from the paper and were produced with the authors' original pipeline, not with this rewrite. Each row is a model that CellForge designed for that dataset.
+
+| Dataset | Setting | Designed model | Reported outcome |
+|---|---|---|---|
+| Adamson 2016 | CRISPRi, scRNA-seq | CPA-X | highest PCC of all methods (0.9883); DE error above the best reference methods |
+| Norman 2019 | CRISPRa, single and paired | scGen-X | lowest MSE on DE genes (0.1736) |
+| Srivatsan 2020 | small molecules and doses | ChemCellFlow | second to CellFlow, which was built for this dataset |
+| Schiebinger 2019 | cytokine-driven differentiation | CPA-Traj | first on several global and DE metrics against generic baselines |
+| Papalexi 2021 | CRISPR, CITE-seq RNA and protein | totalGAT | lowest MSE for RNA and protein; protein recovery weaker than RNA |
+| Liscovitch-Brauer 2021 | CRISPR, scATAC-seq | ChromDDPM | lower overall; ahead of simple baselines on several metrics |
+
+In a blinded comparison of research plans against OpenAI, Perplexity and Gemini Deep Research, Biomni and a single-LLM baseline, CellForge had the highest mean score in 14 of 15 task and criterion combinations. The five LLM judges agreed with each other at r = 0.88 to 0.93, and human expert scores followed those judges more closely than CellForge's own discussion confidence, which correlated with the experts at r = 0.53. [docs/RESULTS.md](docs/RESULTS.md) has the architectures, cost, and the review of failed runs.
+
+## Quick start
 
 ```bash
-cellforge --dataset-path "data/datasets/<prepared-dataset>.h5ad" \
-          --task "Predict single-cell gene expression after CRISPRi knockdown in K562."
-```
-
-What comes back is not a chat transcript. It is **a research plan with citations, a runnable `result.py`, and a trained model** — and on the six perturbation benchmarks in the paper, the models it designed are competitive with or better than hand-built state of the art.
-
-| | |
-|---|---|
-| **PCC 0.9883** | Adamson CRISPRi — best of all methods compared |
-| **MSE_DE 0.1736** | Norman combinatorial CRISPRa, on differentially expressed genes |
-| **14 / 15** | task–criterion combinations where blinded LLM judges ranked CellForge first |
-| **6 datasets, 3 modalities** | scRNA-seq, scATAC-seq, CITE-seq — genetic, chemical, and cytokine perturbations |
-| **4–8 GPU-hours** | end to end, question → trained model, on a single GPU |
-
-> [!NOTE]
-> CellForge does not ship pretrained weights. It ships the *process that produces them*. Every architecture below was specified by the agents, not selected from a menu.
-
-<div align="center">
-<img src="figs/CellForge_project_overview.svg" alt="CellForge workflow: inputs, task analysis, method design, code generation, autorun execution, outputs" width="100%">
-</div>
-
----
-
-## 🚀 Quickstart (5 minutes)
-
-**1. Install**
-
-```bash
-git clone https://github.com/gersteinlab/CellForge.git
-cd CellForge
-conda create -n cellforge python=3.11 -y && conda activate cellforge
+git clone https://github.com/sahielbose/CellForge && cd CellForge
 pip install -e .
+cp .env.example .env                      # one LLM key is enough
+npm install -g @openai/codex && codex login
+
+python scripts/download_datasets.py adamson
+cellforge --init && cellforge --doctor
+
+DATA=data/datasets/AdamsonWeissman2016_GSM2406681_10X010.h5ad
+cellforge --dataset-path $DATA            # formulation, ideation, code generation
+for k in 0 1 2 3 4; do cellforge --phase autorun --dataset-path $DATA --fold $k; done
 ```
 
-**2. Add one API key**
+Each phase can also run alone with `--phase task_analysis`, `method_design`, `code_generation` or `autorun`. For a cluster, add `--executor slurm` with `--partition`, `--gres`, `--mem`, `--slurm-time` and `--conda-env`, then score the finished jobs with `python -m cellforge.autorun.scoring <run folder>`. Any OpenAI-compatible endpoint works through `CUSTOM_API_URL`, and `MODEL_NAME` selects the provider by its prefix. Outputs go to `data/analyses`, `data/plans`, `data/discussion`, `data/codes` and `data/runs`.
 
-```bash
-cp .env.example .env
-# Open .env and set at least one of:
-#   OPENAI_API_KEY / ANTHROPIC_API_KEY / DEEPSEEK_API_KEY / QWEN_API_KEY / LLAMA_API_KEY
-```
+## Changes from the upstream code
 
-**3. Check your workspace**
+The original repository had the three phases, but several of them did not pass their results on. Each change below was checked against upstream commit `6585ff9`.
 
-```bash
-cellforge --init      # create data/{datasets,analyses,plans,codes,literature}
-cellforge --doctor    # verify config, dataset dir, literature dir, LLM key, Python version
-```
-
-**4. Get a dataset**
-
-```bash
-python scripts/download_datasets.py adamson --out data/datasets/
-```
-
-The downloader preserves the original scPerturb filenames and downloads three Adamson files; it does not create `adamson.h5ad` or merge them. Replace `<prepared-dataset>.h5ad` below with the input you have selected and prepared for your task. See [dataset preparation](docs/DATASETS.md).
-
-**5. Run it**
-
-```bash
-cellforge \
-  --dataset-path "data/datasets/<prepared-dataset>.h5ad" \
-  --task "Predict post-perturbation gene expression in K562 cells after CRISPRi knockdown. \
-Report MSE, PCC, R2 overall and restricted to differentially expressed genes."
-```
-
-You will find:
-
-```
-data/
-├── analyses/<dataset>/    # structured task analysis + retrieved literature with provenance
-├── plans/<dataset>/       # the research plan the expert agents converged on
-└── codes/<dataset>/       # result.py — verified, runnable training code
-```
-
-Want to also *train* the model it wrote? Add the opt-in execution stage:
-
-```bash
-cellforge --phase autorun --dataset-path "data/datasets/<prepared-dataset>.h5ad" --executor local --workers 2
-```
-
-📖 **Full walkthrough:** [docs/QUICKSTART.md](docs/QUICKSTART.md) · **Running on a cluster:** [docs/QUICKSTART.md#running-on-slurm](docs/QUICKSTART.md#running-on-slurm)
-
----
-
-## 🏛 Architecture
-
-CellForge is three stages plus an opt-in fourth. Each maps to a directory in the package, and each writes a human-readable artifact you can inspect, edit, or approve before the next stage runs.
-
-```
-                    ┌──────────────────────────────────────────────┐
-   dataset (.h5ad)  │                                              │
-        +           │  ①  TASK ANALYSIS      cellforge/Task_Analysis/
-   task description │     ─────────────                            │
-        ───────────▶│     Dataset Analyst   ·  Problem Investigator │
-                    │     Baseline Assessor ·  Refinement Agent     │
-                    │     + literature retrieval (local · PubMed ·  │
-                    │       Crossref · Semantic Scholar · Qdrant)   │
-                    │                    ↓                         │
-                    │             analysis report                  │
-                    │                    ↓                         │
-                    │  ②  METHOD DESIGN     cellforge/Method_Design/
-                    │     ─────────────                            │
-                    │     Data-modeling expert                     │
-                    │     Single-cell biology expert     ⟳ debate   │
-                    │     Deep-learning expert           ⟳ review   │
-                    │     Training expert                ⟳ revise   │
-                    │          ↕ central CRITIC (area chair)       │
-                    │                    ↓                         │
-                    │             research plan    ◀── 👤 checkpoint │
-                    │                    ↓                         │
-                    │  ③  CODE GENERATION   cellforge/Code_Generation/
-                    │     ─────────────                            │
-                    │     coding agent edits result.py in place    │
-                    │     → deterministic verifier (file / syntax / │
-                    │       CLI / contract) → bounded repair ×5     │
-                    │                    ↓                         │
-                    │             result.py        ◀── 👤 checkpoint │
-                    │                    ↓                         │
-                    │  ④  AUTORUN (opt-in)  cellforge/autorun/      │
-                    │     task-wise split → local or Slurm sbatch   │
-                    └──────────────────────────────────────────────┘
-                                          ↓
-                              trained model + metrics
-```
-
-**The part that makes it work: agents that disagree.**
-
-Method Design is not a prompt chain. Four domain experts each draft a proposal, then peer-review every other proposal, while a central Critic plays conference area chair. Each agent carries a **coordination score** updated every round:
-
-$$c_t^{(i)} = 0.3\,c_{t-1}^{(i)} \;+\; 0.4\,r_{\text{crit},t}^{(i)} \;+\; \frac{0.3}{k-1}\sum_{j \neq i} r_{\text{peer},t}^{(i,j)}$$
-
-Debate runs until every agent clears $c \ge 0.8$ **and** the widest pairwise gap falls below $0.03$ — consensus, not agreement-by-exhaustion — or until 20 rounds elapse. Ablating the Critic, the peer-review loop, or the retrieval corpus each measurably degrades the final model.
-
-**Two human checkpoints, by design.** Nothing touches a GPU unattended: you approve the research plan after Method Design, and the training script before submission.
-
-📖 **Deep dive:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-
----
-
-## 🔬 What CellForge designed
-
-Six datasets in, six architectures out. None were templates — each was specified by the agents, then implemented and trained end to end. Full model cards: [docs/MODELS.md](docs/MODELS.md).
-
-| Model | Designed for | The idea the agents landed on |
-|---|---|---|
-| **CPA-X** | Adamson CRISPRi (scRNA-seq) | Compositional perturbation autoencoder with a disentangled perturbation embedding and adversarial covariate removal |
-| **scGen-X** | Norman combinatorial CRISPRa | Latent-space arithmetic extended to *pairs* of simultaneously activated genes, with an explicit interaction term for non-additive effects |
-| **ChemCellFlow** | Srivatsan drug response | Sinkhorn conditional optimal transport coupled to a 6-layer normalizing flow — dose-aware and chemically conditioned |
-| **CPA-Traj** | Schiebinger cytokine time course | Trajectory-aware VAE that conditions on time as a continuous covariate rather than a class label |
-| **totalGAT** | Papalexi CITE-seq | Graph attention over the gene network, cross-attention between RNA and protein, separate decoder heads per modality |
-| **ChromDDPM** | Liscovitch-Brauer scATAC-seq | Denoising diffusion over the 200k-peak accessibility profile, conditioned on the perturbation |
-
-The trajectory-aware encoder in **CPA-Traj** and the diffusion denoiser in **ChromDDPM** have no counterpart in the seed literature corpus. They came out of the debate.
-
----
-
-## 📊 Benchmarks
-
-Six datasets, seven readouts, five-fold cross-validation, three independent runs, perturbation-centric averaging. Baselines: CPA, scGen, CondOT, Biolord, scGPT, GEARS, STATE, ChemCPA, CellFlow, random forest, linear regression, and the unperturbed control.
-
-| Benchmark | CellForge model | Headline result |
-|---|---|---|
-| Adamson CRISPRi | CPA-X | **PCC 0.9883** — best of all methods compared |
-| Norman combinatorial CRISPRa | scGen-X | **MSE_DE 0.1736** |
-| Schiebinger cytokine time course | CPA-Traj | DEG recall 0.535 |
-| Papalexi CITE-seq (protein) | totalGAT | protein recall 0.420 |
-
-**Against other autonomous systems.** Blinded LLM judges (Claude 3.7, DeepSeek-R1, OpenAI o1, Qwen-plus, Llama 3.1) scored CellForge against OpenAI Deep Research, Perplexity Deep Research, Gemini Deep Research, Biomni, and a single-LLM baseline across 15 task–criterion combinations. **CellForge ranked first in 14 of 15.** Inter-judge agreement was Pearson 0.88–0.93; human expert ratings tracked the judge panel at r = 0.87 — versus r = 0.53 for the system's own internal confidence, which is precisely why the Critic is external.
-
-⚠️ **Where it is still weak.** 0.535 DEG recall on the cytokine time course and 0.420 protein recall on Papalexi are honest numbers, not typos. Sparse, low-count modalities remain hard, and we would rather you know that before you start. Full tables — all 7 metrics, all baselines, all six datasets: [docs/RESULTS.md](docs/RESULTS.md).
-
----
-
-## 🗂 Datasets
-
-| Dataset | Perturbation | Modality | Cells / features | Accession |
-|---|---|---|---|---|
-| Adamson 2016 | CRISPRi | scRNA-seq | 111k / 33k genes | [GSE90546](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE90546) |
-| Norman 2019 | combinatorial CRISPRa | scRNA-seq | 84k / 17k genes | [GSE133344](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE133344) |
-| Srivatsan 2020 | small molecules | scRNA-seq | 81k / 18k genes | [GSE139944](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE139944) |
-| Schiebinger 2019 | cytokine time course | scRNA-seq | 65k / 17k genes | scPerturb |
-| Papalexi 2021 | CRISPR | CITE-seq | 171k / 18k genes + 200 proteins | scPerturb |
-| Liscovitch-Brauer 2021 | CRISPR | scATAC-seq | 58k / 200k peaks | scPerturb |
-
-Preprocessed `.h5ad` files for all six are mirrored by [scPerturb](https://projects.sanderlab.org/scperturb/) at DOI [10.5281/zenodo.13350497](https://doi.org/10.5281/zenodo.13350497).
-
-```bash
-python scripts/download_datasets.py --list           # show everything available
-python scripts/download_datasets.py norman papalexi  # fetch specific ones
-```
-
-📖 **Preprocessing, splits, and DEG definitions:** [docs/DATASETS.md](docs/DATASETS.md)
-
----
-
-## 🧩 Bring your own everything
-
-| You want to swap… | How |
+| Upstream behavior | This version |
 |---|---|
-| **LLM provider** | Set `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `QWEN_API_KEY`, or `LLAMA_API_KEY` — or point `CUSTOM_API_URL` at any OpenAI-compatible endpoint (vLLM, Ollama, TGI, OpenRouter) |
-| **Coding agent** | `--codegen-backend codex`; the backend registry in [`cellforge/Code_Generation/registry.py`](cellforge/Code_Generation/registry.py) takes a new backend in about 40 lines |
-| **Literature corpus** | Drop PDFs in `CELLFORGE_LITERATURE_DIR`; set `QDRANT_ENABLED=true` for vector search over them |
-| **Retrieval providers** | PubMed, Crossref, and Semantic Scholar are pluggable in [`cellforge/retrieval/providers.py`](cellforge/retrieval/providers.py) |
-| **Compute** | `--executor local`, or `--executor slurm` with `--partition / --gres / --mem / --slurm-time` |
-| **Cost ceiling** | `METHOD_DESIGN_MAX_ROUNDS`, `METHOD_DESIGN_MAX_EXPERTS`, `METHOD_DESIGN_MAX_TOKENS_PER_CALL` |
+| `_generate_final_proposal` returned the initial template (the same transformer plan for every dataset), and the expert discussion was only written to a log | the plan is synthesized from the discussion, and a failed synthesis is labeled `template_fallback` |
+| every dataset was described to the agents as K562, CRISPRi, scRNA-seq; analysts returned invented defaults (10,000 cells, 2,000 genes) when an LLM call failed | the dataset file is read, and a failed call is reported as an error |
+| Method Design kept keyword hits from the Task Analysis report and dropped its content | the full report reaches every expert |
+| the consensus score was the first decimal number in the critique text, shared by all experts | each expert gets critic and peer scores and the paper's update rule |
+| held-out perturbations were never scored; the only metric was the generated script's own number on a random cell split of training perturbations, and the control label could land in the held-out set | five perturbation folds, controls kept in training, scoring done by the harness with the paper's metrics and two baselines |
+| TLS verification was disabled for DeepSeek, Llama, Qwen and custom endpoints, prompts were logged, and generated code ran with API keys in its environment | verification on, no prompt logging, secrets removed from the environment of generated code |
+| `temperature=0` became 0.7, reasoning models rejected `max_tokens`, and chat calls kept only the last user message | fixed |
 
----
+Unused code went with it: the legacy RAG system, the OpenHands backend, the Node SDK runner, about 2,000 lines of expert persona text that nothing read, and several agent variants. The Python went from 20,345 lines to 5,630, and the tests cover the split, the scorer, the discussion arithmetic, refinement, the hand-off between phases and an autorun round trip.
 
-## 💰 What a run actually costs
+## Repository layout
 
-Per end-to-end run, from the paper:
-
-| | Simple task | Complex task |
-|---|---|---|
-| Prompt tokens | ~40k | ~80k |
-| Completion tokens | ~200k | ~400k |
-| Generated model size | 10–30M parameters | 10–30M parameters |
-| Wall clock (1 GPU) | ~4h | ~8h |
-
-For a cheap smoke test: `MODEL_NAME=gpt-4o-mini` with `METHOD_DESIGN_MAX_ROUNDS=2` and `METHOD_DESIGN_MAX_EXPERTS=2`.
-
-**When it fails, this is how** — measured across runs: computation execution error 41% · invalid type or unsupported operation 23% · error-recovery failure 16% · model misconfiguration 6% · data access 5% · other system-level 5% · **hallucinated structures 4%**. Outright invented architecture is the *rarest* failure; the verifier and repair loop catch most of it. See [docs/FAQ.md](docs/FAQ.md#failure-modes).
-
----
-
-## 🔐 Safety notes
-
-- **Nothing runs on a GPU without you.** The research plan and the training script are both human-approval checkpoints.
-- **Generated code is verified before it is published.** Files, Python syntax, CLI surface, and the acceptance contract are checked deterministically; failures loop back to the same agent workspace for up to five bounded repair attempts.
-- **The coding agent runs in an OS sandbox** (`workspace-write`), with isolated credentials: `CODEX_AUTH_MODE=local` strips provider API keys from the subprocess. Task Analysis and Method Design credentials are never silently reused for code generation.
-- **Agent traces may contain model-generated commands and output.** They are written with owner-only permissions under `<output_dir>/.cellforge_workspaces/`. Review a workspace before publishing it.
-
----
-
-## 📚 Documentation
-
-| | |
-|---|---|
-| [**Quickstart**](docs/QUICKSTART.md) | Install, configure, first run, Slurm |
-| [**Architecture**](docs/ARCHITECTURE.md) | The stages, agent roster, coordination score, ablations |
-| [**Results**](docs/RESULTS.md) | Full benchmark tables, all metrics, all baselines, judge study |
-| [**Model cards**](docs/MODELS.md) | The six generated architectures in detail |
-| [**Datasets**](docs/DATASETS.md) | Sources, preprocessing, splits, DEG definitions |
-| [**FAQ**](docs/FAQ.md) | Cost, failure modes, limitations, troubleshooting |
-| [**Roadmap**](docs/ROADMAP.md) | Where this is going, and what to help with |
-| [**Contributing**](CONTRIBUTING.md) | Dev setup, tests, PR conventions |
-
----
-
-## 🤝 Contributing
-
-Good first issues, in rough order of how much they help:
-
-1. **Add a dataset.** A new perturbation dataset with a loader and a split definition is the single most valuable contribution — it directly widens the benchmark.
-2. **Add a baseline.** More comparators make the evaluation harder to argue with.
-3. **Add a code-generation backend.** The registry is small on purpose.
-4. **Add a retrieval provider.** bioRxiv, OpenAlex, and Europe PMC are all unclaimed.
-5. **Report a failure.** A run that produced a bad plan, with the plan attached, is genuinely useful data.
-
-```bash
-pip install -e ".[dev]"
-python -m pytest tests -v
+```
+main.py                       command line (the `cellforge` entry point)
+cellforge/dataset.py          reads perturbation, control and modality facts from an .h5ad
+cellforge/llm.py              one client for OpenAI, Anthropic, DeepSeek, Llama, Qwen and custom endpoints
+cellforge/retrieval/          local corpus plus PubMed, Crossref and Semantic Scholar, with evidence IDs
+cellforge/Task_Analysis/      three analysts, the refinement agent, the report
+cellforge/Method_Design/      expert pool, graph discussion, plan synthesis
+cellforge/Code_Generation/    Codex backend, verifier, repair loop
+cellforge/autorun/            five-fold split, local and Slurm runs, scoring
+scripts/download_datasets.py  the six benchmark datasets from scPerturb, checksum-verified
 ```
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) first. Be decent: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
-
----
-
-## 📖 Citation
+## Citation
 
 ```bibtex
 @article{tang2025cellforge,
@@ -310,19 +123,4 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) first. Be decent: [CODE_OF_CONDUCT.md](C
 }
 ```
 
-A [`CITATION.cff`](CITATION.cff) is included, so GitHub's *Cite this repository* button works too.
-
----
-
-## 📜 License
-
-MIT — see [LICENSE](LICENSE).
-
-<div align="center">
-<br>
-
-**Built at the [Gerstein Lab](https://gersteinlab.org), Yale University.**
-
-If CellForge saved you a month of architecture search, a ⭐ is a nice way to say so.
-
-</div>
+GitHub's citation button reads the same entry from [`CITATION.cff`](CITATION.cff). The code is released under the MIT license.

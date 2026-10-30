@@ -1,173 +1,36 @@
 # Datasets
 
-CellForge is benchmarked on six perturbation datasets spanning three modalities and
-four perturbation types.
+The paper benchmarks CellForge on six perturbation datasets, all distributed as harmonized AnnData files by [scPerturb](https://projects.sanderlab.org/scperturb/) (Peidli et al., *Nature Methods* 2024). The RNA and protein files are in Zenodo record [13350497](https://doi.org/10.5281/zenodo.13350497) and the ATAC files in record [7058382](https://doi.org/10.5281/zenodo.7058382). `scripts/download_datasets.py` fetches them and checks every file against the MD5 that Zenodo publishes.
 
-- [The benchmark](#the-benchmark)
-- [Getting the data](#getting-the-data)
-- [Preprocessing](#preprocessing)
-- [Splits](#splits)
-- [Differential expression](#differential-expression)
-- [Bring your own data](#bring-your-own-data)
-- [Adding a dataset to the benchmark](#adding-a-dataset-to-the-benchmark)
-
----
-
-## The benchmark
-
-| Dataset | Perturbation | Modality | Cells | Features | Accession |
-|---|---|---|---|---|---|
-| **Adamson 2016** | CRISPRi (single gene) | scRNA-seq | 111k | 33k genes | [GSE90546](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE90546) |
-| **Norman 2019** | CRISPRa (single + combinatorial) | scRNA-seq | 84k | 17k genes | [GSE133344](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE133344) |
-| **Srivatsan 2020** | small molecules, multiple doses | scRNA-seq | 81k | 18k genes | [GSE139944](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE139944) |
-| **Schiebinger 2019** | cytokine stimulation, time course | scRNA-seq | 65k | 17k genes | via scPerturb |
-| **Papalexi 2021** | CRISPR | CITE-seq | 171k | 18k genes + 200 proteins | via scPerturb |
-| **Liscovitch-Brauer 2021** | CRISPR | scATAC-seq | 58k | 200k peaks | via scPerturb |
-
-Six datasets, **seven readouts** — Papalexi contributes an RNA readout and a protein
-readout, which are scored separately.
-
-Coverage is deliberate:
-
-| | genetic KD | genetic OE | combinatorial | chemical | cytokine | temporal |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|
-| Adamson | ✅ | | | | | |
-| Norman | | ✅ | ✅ | | | |
-| Srivatsan | | | | ✅ | | |
-| Schiebinger | | | | | ✅ | ✅ |
-| Papalexi | ✅ | | | | | |
-| Liscovitch-Brauer | ✅ | | | | | |
-
-| | scRNA-seq | scATAC-seq | CITE-seq |
-|---|:---:|:---:|:---:|
-| | 4 datasets | 1 | 1 |
-
----
-
-## Getting the data
-
-Preprocessed `.h5ad` files for all six are distributed by
-[**scPerturb**](https://projects.sanderlab.org/scperturb/), archived at
-DOI [10.5281/zenodo.13350497](https://doi.org/10.5281/zenodo.13350497). Use these
-rather than reprocessing from GEO — it is what the paper used, and it removes a large
-source of irreproducibility.
+| Key | Study | Perturbation | Readout | GEO | Download |
+|---|---|---|---|---|---:|
+| `adamson` | Adamson et al. 2016 | CRISPRi, single genes | scRNA-seq | GSE90546 | 615 MB |
+| `norman` | Norman et al. 2019 | CRISPRa, single genes and pairs | scRNA-seq | GSE133344 | 666 MB |
+| `srivatsan` | Srivatsan et al. 2020 (sci-Plex 3) | small molecules at several doses | scRNA-seq | GSE139944 | 2.4 GB |
+| `schiebinger` | Schiebinger et al. 2019 | time course of mouse fibroblast reprogramming, which the paper treats as cytokine-driven differentiation | scRNA-seq | GSE106340 | 361 MB |
+| `papalexi` | Papalexi et al. 2021 (ECCITE-seq) | CRISPR | RNA and surface protein, scored separately | GSE153056 | 142 MB |
+| `liscovitch` | Liscovitch-Brauer et al. 2021 | CRISPR | scATAC-seq | GSE168851 | 524 MB |
 
 ```bash
-python scripts/download_datasets.py --list                # what is available
-python scripts/download_datasets.py adamson               # one
-python scripts/download_datasets.py norman papalexi       # several
-python scripts/download_datasets.py --all --out data/datasets/
+python scripts/download_datasets.py --list
+python scripts/download_datasets.py adamson norman      # into data/datasets
+python scripts/download_datasets.py --all --dry-run     # file names, sizes and URLs only
 ```
 
-The script verifies checksums and skips files already present. Raw counts from GEO are
-linked in the table above if you want to reprocess from scratch.
+Adamson comes as three files, one per GEO sample (GSM2406675, GSM2406677 and GSM2406681), and the paper does not say which it used, so the quick start points at the largest. The Liscovitch-Brauer data arrives as two zip archives that have to be unpacked before use.
 
-**Do not commit these files.** They range from hundreds of MB to several GB and
-`data/` is gitignored.
+## What CellForge expects in a file
 
----
+Any `.h5ad` works if it has these two things.
 
-## Preprocessing
+The perturbation label is read from the first of these `obs` columns that exists: `perturbation`, `perturbation_id`, `gene`, `target_gene`, `condition`, `guide_identity`. The scPerturb files use `perturbation`.
 
-The scPerturb releases are already normalised and harmonised. Beyond that:
+Control cells are recognized by their label. A label counts as a control if it contains `control`, `ctrl`, `non-targeting`, `nontargeting`, `non_targeting`, `unperturbed`, `dmso` or `vehicle`, or is exactly `nt`, `none` or `*`, ignoring case. All control labels are pooled into one reference group, and a dataset with no control cells cannot be split, because every prediction is made relative to them.
 
-| Step | Setting |
-|---|---|
-| Count normalisation | library-size normalise, log1p |
-| Gene filtering | as distributed by scPerturb |
-| Perturbation labels | harmonised to scPerturb's `perturbation` field in `.obs` |
-| Control cells | scPerturb's non-targeting / vehicle annotation |
+`X` can hold raw counts or log-normalized values. When it holds integers, the scorer normalizes each cell to 10,000 counts over all genes and takes log1p before averaging, and when it does not, the values are used as they are. Generated models are asked to write predictions on the log1p(CP10k) scale either way. The feature space is called scATAC-seq when most variable names look like genomic coordinates (`chr...`) and scRNA-seq otherwise.
 
-For scATAC-seq the feature space is a 200k-peak binary-ish accessibility matrix, which
-is why that readout is scored with ROC-AUC and PR-AUC rather than MSE and PCC.
-
----
+Task Analysis records the facts it reads in its report: cell and feature counts, the perturbation column, the number of perturbations, the control labels and the number of control cells, the median number of cells per perturbation, examples of perturbation names, the largest number of targets in one cell when there is an `nperts` column, and the `cell_line`, `celltype`, `organism` and `perturbation_type` annotations when they exist.
 
 ## Splits
 
-Two evaluation scenarios, and they test different things:
-
-### Unseen perturbations (out-of-distribution)
-
-A fraction of perturbations is held out entirely — the model never sees a single cell
-carrying them. This is the scientifically interesting question: *can you predict the
-effect of an experiment nobody has run?*
-
-Controlled by `--split-ood-ratio` (default `0.2`).
-
-### Unseen cell contexts
-
-All perturbations are seen in training, but the held-out cells have baseline expression
-profiles that were not. This tests generalisation across cell state rather than across
-perturbation.
-
-Controlled by `--split-val-ratio` (default `0.1`, applied within the in-distribution
-split).
-
-### Cross-validation
-
-5-fold, 3 independent runs, `--split-seed 42` in the paper. Results are averaged
-**per perturbation, not per cell** — see [RESULTS.md](RESULTS.md#how-the-evaluation-was-run)
-for why that choice changes the numbers.
-
----
-
-## Differential expression
-
-DE genes are called with:
-
-- **Wilcoxon rank-sum test**, perturbed versus control
-- **Benjamini–Hochberg** correction for multiple testing
-- kept if **adjusted *p* < 0.05** and **|log₂FC| > 0.5**
-
-Every `_DE` metric (MSE_DE, PCC_DE, R2_DE) and DEG Recall is computed over that set.
-
-This definition is doing real work. Most genes do not respond to most perturbations, so
-a model predicting "no change" scores well on genome-wide MSE. Restricting to genes that
-actually moved is what makes the metric discriminative.
-
----
-
-## Bring your own data
-
-CellForge accepts any AnnData `.h5ad`:
-
-```bash
-cellforge --dataset-path /path/to/your.h5ad --task "..."
-```
-
-The Dataset Analyst inspects the object directly, so there is no rigid schema, but it
-works best when:
-
-| Field | Expectation |
-|---|---|
-| `adata.X` | Normalised expression (log1p of library-size-normalised counts) |
-| `adata.obs['perturbation']` | Perturbation label per cell |
-| control cells | Labelled `control`, `non-targeting`, or `NT` |
-| `adata.obs` covariates | Batch, cell type, dose, time — anything the model should condition on or adjust for |
-| `adata.var_names` | Gene symbols or a consistent stable ID |
-
-If your labels use different names, say so in the task description. The analyst reads
-it:
-
-> "Perturbations are in `obs['guide_target']`; control cells are labelled `safe_harbor`.
-> Dose in µM is in `obs['concentration']`."
-
----
-
-## Adding a dataset to the benchmark
-
-The single most valuable contribution to this project. A complete one has:
-
-1. **An entry in `scripts/download_datasets.py`** — stable URL, SHA-256, file size.
-2. **A row in the table above** — assay, perturbation type, cell and feature counts,
-   accession.
-3. **A documented split** — which perturbations are held out and on what principle.
-   "Random 20%" is fine if you say so.
-4. **At least one baseline number** so the comparison table is not empty.
-5. **A `.h5ad` that is publicly downloadable without registration.** If it needs a data
-   access agreement, it cannot go in the benchmark, though CellForge will still run on it
-   locally.
-
-Open a [feature request](https://github.com/gersteinlab/CellForge/issues/new?template=feature_request.yml)
-first if you want to check whether a dataset is a good fit before doing the work.
+`cellforge --phase autorun --fold k` writes the split for fold `k` under `data/datasets/splits/<dataset>/`, and a later run with the same fold, fold count, validation share and seed reuses it. The perturbation identities that are not controls are shuffled with the seed (42 by default) and dealt into `--folds` groups (five by default). Fold `k` is the test set. Validation takes 10% of all perturbations (`--split-val-ratio`) from those left after the test fold, and everything else, plus every control cell, is training. A dataset needs at least seven non-control perturbations for five folds. Each split folder holds `train.h5ad`, `val.h5ad`, `test.h5ad`, the two lists of held-out names, and a `split_manifest.json` with the counts and settings.

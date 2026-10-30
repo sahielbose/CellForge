@@ -1,234 +1,52 @@
-# Results
+# Results reported in the paper
 
-Everything here comes from the paper, [arXiv:2508.02276](https://arxiv.org/abs/2508.02276).
-Where a full table is too large to reproduce faithfully, this page gives the headline
-figure and points at the section of the paper that carries the complete numbers — we
-would rather link than paraphrase a table into something subtly wrong.
+Everything on this page is taken from the CellForge manuscript ([arXiv:2508.02276](https://arxiv.org/abs/2508.02276)), and the section names refer to its current revision. The authors produced these results with their original pipeline, which ran code through OpenHands, so none of them were made with this repository. [EXPERIMENTS.md](EXPERIMENTS.md) describes how to measure this version against them.
 
-- [How the evaluation was run](#how-the-evaluation-was-run)
-- [Metrics](#metrics)
-- [Headline results](#headline-results)
-- [Baselines](#baselines)
-- [Against other autonomous systems](#against-other-autonomous-systems)
-- [Does the judging mean anything?](#does-the-judging-mean-anything)
-- [Where CellForge is weak](#where-cellforge-is-weak)
-- [Cost](#cost)
-- [Failure modes](#failure-modes)
-- [Reproducing this](#reproducing-this)
+## Protocol
 
----
+CellForge was evaluated on six perturbation datasets with seven held-out readouts, since the Papalexi CITE-seq data is scored separately for RNA and for surface protein. Perturbation identities were split into five folds, every method was scored only on held-out perturbations, and each CellForge result is a mean over three independent runs of the full design, implementation and training cycle. Metrics are computed per held-out perturbation from mean profiles and then averaged, first over perturbations and then over folds. The differentially expressed set for each perturbation is the top 50 genes from `scanpy.tl.rank_genes_groups`, using `t-test_overestim_var` for the established scRNA-seq benchmarks and the Wilcoxon test for the multimodal ones, and Recovery@50 and AUROC measure how well the predicted change ranks those genes.
 
-## How the evaluation was run
+For the three established benchmarks the reference methods were CPA, scGen, CondOT, Biolord and scGPT for genetic perturbations, and ChemCPA and CellFlow for drugs, alongside unperturbed, random-forest and linear-regression controls, all reproduced on the same folds. The other three datasets have no published task-specific predictor, so CellForge was compared with linear regression, random forest, a graph neural network and a Transformer trained under the same protocol.
 
-| | |
-|---|---|
-| Datasets | 6 (see [DATASETS.md](DATASETS.md)) |
-| Readouts | 7 — Papalexi CITE-seq contributes both RNA and protein |
-| Modalities | scRNA-seq, scATAC-seq, CITE-seq |
-| Perturbation types | CRISPRi, CRISPRa (single and combinatorial), small molecules, cytokines |
-| Cross-validation | 5-fold |
-| Repeats | 3 independent runs |
-| Averaging | **perturbation-centric** — averaged over perturbations, not over cells |
-| Early stopping | patience 10 |
-| LR schedule | cosine annealing |
+The scorer in this repository follows the same definitions with one simplification: it ranks genes by the `t-test_overestim_var` statistic for every readout, including the multimodal ones where the paper used the Wilcoxon test.
 
-Perturbation-centric averaging matters. Averaging over cells lets a few
-heavily-sampled perturbations dominate the score; averaging over perturbations asks the
-harder and more useful question, *does this work for a perturbation I have few cells
-for?*
+## The designed models
 
----
+Each model below is the architecture CellForge produced for one dataset, described as the paper describes it. All of them have between 10 and 30 million parameters.
 
-## Metrics
+| Model | Dataset | Architecture | Outcome |
+|---|---|---|---|
+| CPA-X | Adamson, CRISPRi | MLP expression encoder with a multi-head cross-attention block in which the perturbation embedding attends to the encoded control state; related to scGen and CPA | highest PCC of all methods, 0.9883, but a higher DE error than the best reference methods |
+| scGen-X | Norman, CRISPRa singles and pairs | bottlenecked expression encoder, cross-attention that fuses perturbation identity with cell context, residual MLP decoder; resembles GEARS and AttentionPert | lowest MSE on DE genes, 0.1736 |
+| ChemCellFlow | Srivatsan, drugs and doses | gene and chemical encoders conditioned on compound and dose, a Sinkhorn conditional optimal-transport block, and a normalizing flow (six flow layers in the supplementary code); closest to CellFlow | second best, behind CellFlow, which was developed and tuned for this dataset |
+| CPA-Traj | Schiebinger, cytokine-driven differentiation | trajectory-aware VAE with shared and condition-specific latents, a continuous time covariate, a perturbation-mixing module and an MLP decoder | first on several global and DE metrics |
+| totalGAT | Papalexi, CITE-seq | modality-specific encoders, graph attention, cross-attention with perturbation embeddings, and separate RNA and protein heads | lowest MSE for both RNA and protein and better RNA DE correlation than the generic baselines, which stayed competitive on some global correlations; protein recovery weaker than RNA |
+| ChromDDPM | Liscovitch-Brauer, scATAC-seq | DDPM-style denoiser: a two-stage MLP bottleneck on baseline accessibility, sinusoidal step and perturbation conditioning, a four-block residual MLP with noise and accessibility heads, and an auxiliary head that reconstructs the perturbation | lower than the expression tasks overall, ahead of simple baselines on several metrics; the paper calls it a plausible adaptation of diffusion, not a validated chromatin architecture |
 
-| Metric | Direction | What it tells you |
-|---|---|---|
-| MSE | ↓ | Average squared error across all genes |
-| PCC | ↑ | Linear correlation with the observed profile |
-| R² | ↑ | Variance explained |
-| MSE_DE | ↓ | MSE restricted to differentially expressed genes |
-| PCC_DE | ↑ | PCC restricted to DE genes |
-| R2_DE | ↑ | R² restricted to DE genes |
-| DEG Recall | ↑ | Fraction of true DE genes recovered |
-| ROC-AUC / PR-AUC | ↑ | For the accessibility (scATAC) readout |
+## Research plans
 
-**The `_DE` variants are the ones to look at.** Most genes barely move under most
-perturbations, so a model that predicts "nothing changed" scores respectably on plain
-MSE and PCC while being scientifically useless. Restricting to DE genes removes that
-free ride.
+Plans from CellForge were compared with plans written from the same task specification by OpenAI Deep Research, Perplexity Deep Research, Gemini Deep Research, Biomni and a single-LLM prompting baseline, with system identities hidden. Five LLM judges (Claude 3.7, DeepSeek-R1, OpenAI o1, Qwen-2.5 and Llama 3.1) scored each plan from 1 to 10 for scientific validity, technical feasibility, innovation, experimental design and impact potential. CellForge had the highest mean score in 14 of 15 task and criterion combinations, and the exception was technical feasibility on the drug task, where OpenAI Deep Research scored higher. Pairwise correlations among the judges ranged from 0.88 to 0.93.
 
-DE genes are defined by Wilcoxon rank-sum with Benjamini–Hochberg correction, keeping
-genes with adjusted *p* < 0.05 and |log₂FC| > 0.5.
-
----
-
-## Headline results
-
-### Adamson — CRISPRi, K562, scRNA-seq
-
-| Method | PCC ↑ |
-|---|---|
-| **CellForge — CPA-X** | **0.9883** |
-| Best baseline | lower |
-
-The highest correlation of any method compared on this dataset.
-
-### Norman — combinatorial CRISPRa, scRNA-seq
-
-| Method | MSE_DE ↓ |
-|---|---|
-| **CellForge — scGen-X** | **0.1736** |
-
-Combinatorial activation is the harder setting: the model has to predict the effect of
-gene pairs whose *joint* perturbation it has not seen, and those effects are frequently
-non-additive.
-
-### Schiebinger — cytokine time course, scRNA-seq
-
-| Method | DEG Recall ↑ |
-|---|---|
-| CellForge — CPA-Traj | 0.535 |
-
-### Papalexi — CITE-seq, protein readout
-
-| Method | Recall ↑ |
-|---|---|
-| CellForge — totalGAT | 0.420 |
-
-Full per-dataset, per-metric tables for all six datasets and all baselines are in the
-paper's Results section.
-
----
-
-## Baselines
-
-Every CellForge-designed model was compared against:
-
-**Perturbation-specific methods** — CPA, scGen, CondOT, Biolord, GEARS, ChemCPA, CellFlow
-**Foundation models** — scGPT, STATE
-**Classical** — random forest, linear regression
-**Control** — unperturbed profile
-
-The unperturbed control deserves a note: it is the "predict no change" baseline, and on
-plain MSE it is a genuinely competitive number. That is the point of including it.
-
----
-
-## Against other autonomous systems
-
-CellForge was compared with five other systems that also attempt autonomous research:
-
-- OpenAI Deep Research
-- Perplexity Deep Research
-- Gemini Deep Research
-- [Biomni](https://github.com/snap-stanford/Biomni)
-- a single-LLM baseline (Claude 3.7, one shot)
-
-Outputs were scored blind by a panel of five judge models — Claude 3.7, DeepSeek-R1,
-OpenAI o1, Qwen-plus, and Llama 3.1 — across 15 task–criterion combinations.
-
-> **CellForge ranked first in 14 of 15.**
-
----
-
-## Does the judging mean anything?
-
-A fair question to ask of any LLM-as-judge result. Three checks:
-
-| Check | Value | Reading |
-|---|---|---|
-| Inter-judge agreement | Pearson **0.88 – 0.93** | The five judges largely agree; the ranking is not one model's idiosyncrasy |
-| Human experts vs. judge panel | r = **0.87** | The panel tracks human expert opinion closely |
-| Human experts vs. CellForge's own internal confidence | r = **0.53** | **Self-assessment is much weaker** |
-
-That last row is the load-bearing one. It is the empirical justification for the Critic
-being external to the authoring agents: a system asked to score its own work correlates
-with expert judgement at roughly half the strength of an outside panel.
-
----
-
-## Where CellForge is weak
-
-Stated plainly, because you will find out anyway:
-
-- **Sparse, low-count modalities.** 0.535 DEG recall on the cytokine time course and
-  0.420 protein recall on Papalexi are the weakest results in the paper. Surface-protein
-  prediction in CITE-seq and temporally-resolved responses both remain hard.
-- **Execution is the bottleneck, not ideation.** 41% of failures are computation
-  execution errors and another 23% are invalid types or unsupported operations. The
-  agents are better at proposing architectures than at getting them to run first try.
-- **Cost is real.** 4–8 GPU-hours and 200–400k completion tokens per end-to-end run is
-  not something you fire off casually.
-- **The benchmark is six datasets.** Broad across modality and perturbation type, but
-  six. Adding a seventh is the [most valuable contribution](../CONTRIBUTING.md#1-add-a-dataset)
-  available.
-
----
+Three single-cell biologists also rated the plans blind, on criteria that include biological plausibility, mechanism explanation, pathway relevance and generalization across perturbations, and they favored CellForge in most but not all combinations. Their scores tracked the LLM judges more closely than CellForge's internal coordination score, which correlated with the experts at r = 0.53. The paper takes this as support for LLM judges in plan-level comparison, and as evidence that deliberation confidence cannot stand in for external evaluation.
 
 ## Cost
 
-Per end-to-end run:
+The paper reports these token counts as illustrative ranges per run, not audited totals.
 
-| | Simple task | Complex task |
-|---|---|---|
-| Prompt tokens | ~40,000 | ~80,000 |
-| Completion tokens | ~200,000 | ~400,000 |
-| Generated model | 10–30M parameters | 10–30M parameters |
-| Wall clock, 1 GPU | ~4h | ~8h |
+| Phase | Simple task, prompt | Simple task, completion | Complex task, prompt | Complex task, completion |
+|---|---:|---:|---:|---:|
+| Task preparation | 15,000 | 50,000 | 25,000 | 100,000 |
+| Research ideation | 20,000 | 100,000 | 40,000 | 200,000 |
+| Experiment execution | 5,000 | 50,000 | 15,000 | 100,000 |
+| Total | 40,000 | 200,000 | 80,000 | 400,000 |
 
-Completion dominates by roughly 5:1, which is what you would expect from a system whose
-expensive stage is agents writing proposals, reviews, and code rather than reading.
+Models were trained through Slurm on the Yale misha and bouchet clusters, one GPU per job with a one-day wall-time limit, and each repair or retraining round was a new job. A run typically finished in four to eight hours once scheduled, mostly spent training.
 
----
+## Failed runs
 
-## Failure modes
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../figs/failure-modes-dark.svg">
+  <img src="../figs/failure-modes.svg" width="760" alt="Failure modes in 20 reviewed failed runs: execution errors 41%, invalid types 23%, error recovery 16%, configuration 6%, data access 5%, other 5%, hallucinated structures 4%.">
+</picture>
 
-Distribution across runs:
-
-| Failure | Share |
-|---|---|
-| Computation execution error | 41% |
-| Invalid type or unsupported operation | 23% |
-| Error-recovery failure | 16% |
-| Model misconfiguration | 6% |
-| Data access | 5% |
-| Other system-level | 5% |
-| **Hallucinated structures** | **4%** |
-
-The headline here is the last row. The failure people expect from an LLM writing model
-code — inventing a layer or an API that does not exist — is the *rarest* one, at 4%.
-Two thirds of failures are ordinary execution problems: shape mismatches, dtype errors,
-operations unsupported on the given tensor. Those are engineering bugs, and the bounded
-repair loop resolves many of them; error-*recovery* failure at 16% is where the repair
-loop itself gives up.
-
----
-
-## Running on your prepared benchmark input
-
-The downloader preserves original filenames and does not merge the three Adamson files. Replace `<prepared-dataset>.h5ad` with your prepared benchmark input, using the preprocessing and split definitions in [DATASETS.md](DATASETS.md).
-
-```bash
-# 1. get the data
-python scripts/download_datasets.py --all --out data/datasets/
-
-# 2. run the pipeline for one benchmark
-cellforge --dataset-path "data/datasets/<prepared-dataset>.h5ad" \
-          --task "Predict post-perturbation gene expression in K562 cells after CRISPRi knockdown."
-
-# 3. train the model it designed, with the paper's split settings
-cellforge --phase autorun \
-          --dataset-path "data/datasets/<prepared-dataset>.h5ad" \
-          --executor slurm --partition <your-gpu-partition> \
-          --gres gpu:1 --mem 32G --slurm-time 08:00:00 \
-          --split-ood-ratio 0.2 --split-val-ratio 0.1 --split-seed 42
-```
-
-**You will not get byte-identical results, and you should not expect to.** CellForge
-designs a *new* architecture on each run; LLM sampling, retrieval results that shift as
-the literature grows, and the debate trajectory all vary. What should reproduce is the
-*quality band* — a competitive perturbation model, not the exact CPA-X described in
-[MODELS.md](MODELS.md).
-
-If you get something materially worse, that is worth an issue. Attach the research
-plan.
+The authors reviewed 20 failed executions by hand. Running and repairing code accounts for 80% of the reported shares, while hallucinated structures or outputs, the failure most often expected from a language model, account for 4%. The paper used this profile to add tensor-shape tracing and stricter type checks to the repair step. Most of these failures happen after a design already exists, which is why the experiments in [EXPERIMENTS.md](EXPERIMENTS.md) begin by closing the loop in the execution stage.

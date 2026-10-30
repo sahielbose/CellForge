@@ -97,11 +97,19 @@ def _auroc(score: np.ndarray, positive: np.ndarray) -> float:
     return float((ranks[positive].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
 
 
+def _recall(change: np.ndarray, positive: np.ndarray, k: int) -> float:
+    """Recovery@k with ties at the cutoff counted by their expected share, so a flat prediction scores k/p."""
+
+    cutoff = np.sort(change)[::-1][k - 1]
+    above, tied = change > cutoff, change == cutoff
+    hits = (above & positive).sum() + (k - above.sum()) * (tied & positive).sum() / tied.sum()
+    return float(hits / k)
+
+
 def profile_metrics(pred: np.ndarray, truth: np.ndarray, control: np.ndarray, de: np.ndarray) -> Dict[str, float]:
     change = np.abs(pred - control)
     positive = np.zeros(len(truth), dtype=bool)
     positive[de] = True
-    predicted_top = np.argsort(-change, kind="stable")[: len(de)]
     return {
         "MSE": float(((pred - truth) ** 2).mean()),
         "PCC": _pearson(pred, truth),
@@ -110,13 +118,13 @@ def profile_metrics(pred: np.ndarray, truth: np.ndarray, control: np.ndarray, de
         "MSE_DE": float(((pred[de] - truth[de]) ** 2).mean()),
         "PCC_DE": _pearson(pred[de], truth[de]),
         "R2_DE": _r2(pred[de], truth[de]),
-        "Recall": len(set(predicted_top) & set(de)) / len(de),
+        "Recall": _recall(change, positive, len(de)),
         "AUROC": _auroc(change, positive),
     }
 
 
 def score_predictions(
-    predictions_path: str,
+    predictions_path: Optional[str],
     test_path: str,
     train_path: str,
     key: str,
@@ -124,8 +132,9 @@ def score_predictions(
 ) -> Dict[str, object]:
     import anndata as ad
 
-    pred, test, train = ad.read_h5ad(predictions_path), ad.read_h5ad(test_path), ad.read_h5ad(train_path)
-    genes = [g for g in pred.var_names if g in set(test.var_names) & set(train.var_names)]
+    test, train = ad.read_h5ad(test_path), ad.read_h5ad(train_path)
+    pred = ad.read_h5ad(predictions_path) if predictions_path else None  # None scores the baselines only
+    genes = [g for g in (pred if pred is not None else test).var_names if g in set(test.var_names) & set(train.var_names)]
     if not genes:
         raise ValueError("Predictions share no genes with the test set")
     k = n_de or n_de_genes(len(genes))
@@ -137,20 +146,21 @@ def score_predictions(
     shifts = [mean - control for label, (mean, _, _) in train_stats.items() if label != CONTROL]
     mean_shift = control + (np.mean(shifts, axis=0) if shifts else 0)
 
-    pred_labels = pred.obs[key].astype(str).to_numpy()
-    pred_matrix = _dense(pred[:, genes].X)
+    pred_labels = pred.obs[key].astype(str).to_numpy() if pred is not None else None
+    pred_matrix = _dense(pred[:, genes].X) if pred is not None else None
     rows = {"model": [], "no_change": [], "mean_shift": []}
     missing = []
     for label, stats in truth.items():
         if label == CONTROL:
             continue
-        hits = np.flatnonzero(pred_labels == label)
+        hits = np.flatnonzero(pred_labels == label) if pred is not None else [None]
         if not len(hits):
             missing.append(label)
             continue
         de = de_genes(stats, train_stats[CONTROL], k)
         observed = stats[0]
-        rows["model"].append(profile_metrics(pred_matrix[hits[0]], observed, control, de))
+        if pred is not None:
+            rows["model"].append(profile_metrics(pred_matrix[hits[0]], observed, control, de))
         rows["no_change"].append(profile_metrics(control, observed, control, de))
         rows["mean_shift"].append(profile_metrics(mean_shift, observed, control, de))
 
@@ -160,8 +170,8 @@ def score_predictions(
     summary = {name: average(entries) for name, entries in rows.items()}
     model, baseline = summary["model"], summary["mean_shift"]
     return {
-        "n_test_perturbations": len(rows["model"]) + len(missing),
-        "n_scored": len(rows["model"]),
+        "n_test_perturbations": len(rows["no_change"]) + len(missing),
+        "n_scored": len(rows["no_change"]),
         "missing_perturbations": missing,
         "n_genes": len(genes),
         "n_de_genes": k,
@@ -191,9 +201,17 @@ def score_run(run_root: str) -> List[Dict[str, object]]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Score an autorun directory on its held-out perturbations.")
-    parser.add_argument("run_root")
+    parser = argparse.ArgumentParser(description="Score held-out perturbations.")
+    parser.add_argument("run_root", nargs="?", help="autorun folder whose jobs wrote predictions.h5ad")
+    parser.add_argument("--baselines", metavar="SPLIT_DIR", help="score only the reference predictors on a split")
     args = parser.parse_args()
+    if args.baselines:
+        split = json.loads((Path(args.baselines) / "split_manifest.json").read_text(encoding="utf-8"))
+        result = score_predictions(None, split["test_h5ad"], split["train_h5ad"], split["perturbation_key"])
+        print(json.dumps({k: result["metrics"][k] for k in ("no_change", "mean_shift")}, indent=2))
+        return 0
+    if not args.run_root:
+        parser.error("give an autorun folder or --baselines SPLIT_DIR")
     for result in score_run(args.run_root):
         print(json.dumps(result["metrics"]["model"], indent=2))
     return 0

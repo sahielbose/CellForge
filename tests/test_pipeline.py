@@ -120,6 +120,7 @@ def test_perfect_predictions_beat_the_mean_shift_baseline(screen, tmp_path):
     assert result["n_de_genes"] == 20
     assert result["metrics"]["no_change"]["PCC_delta"] == 0.0
     assert result["metrics"]["no_change"]["AUROC"] == 0.5
+    assert result["metrics"]["no_change"]["Recall"] == pytest.approx(result["n_de_genes"] / N_GENES)
     assert result["beats_mean_shift_on_PCC_delta"]
 
 
@@ -164,7 +165,7 @@ class ScriptedLLM:
         self.calls += 1
         prompt = messages[-1]["content"]
         names = [name for name in CORE if f"### {name}" in prompt]
-        if "Merge these expert proposals" in prompt:
+        if prompt.startswith("Write the research plan"):
             return json.dumps(self.plan) if self.plan else "not json"
         if "area chair" in prompt or "Review these proposals" in prompt:
             if self.score is None:
@@ -192,6 +193,22 @@ def test_discussion_stops_at_consensus_after_min_rounds():
 
     assert state.consensus_reached
     assert len(state.history) == 3
+
+
+def test_discussion_stops_after_one_round_when_reviews_are_high():
+    state = GraphDiscussion(ScriptedLLM(score=1.0), team(), "task", max_rounds=20).run()
+
+    assert state.consensus_reached
+    assert len(state.history) == 1
+
+
+def test_scores_are_clamped_to_the_paper_range():
+    discussion = GraphDiscussion(ScriptedLLM(score=0.0), team(), "task", max_rounds=1)
+
+    discussion.run_round(0)
+
+    # reviews of 0 count as the paper's floor of 0.1: 0.3 * 0.5 + 0.7 * 0.1
+    assert all(score == pytest.approx(0.22) for score in discussion.state.scores.values())
 
 
 def test_unparseable_reviews_never_reach_consensus():
@@ -224,6 +241,7 @@ def test_synthesized_plan_is_marked_as_discussion_output(tmp_path, monkeypatch):
 
     assert result["json"]["plan_source"] == "expert_discussion"
     assert result["json"]["model_architecture"]["name"] == "DeltaMLP"
+    assert result["json"]["selected_proposal"] in CORE
     assert result["discussion_summary"]["consensus_reached"]
 
 
@@ -370,3 +388,43 @@ def test_autorun_runs_and_scores_a_generated_script(screen, tmp_path, monkeypatc
     # the script predicts the mean shift, so it scores exactly as the mean-shift baseline
     assert score["metrics"]["model"]["PCC_delta"] == pytest.approx(score["metrics"]["mean_shift"]["PCC_delta"], abs=1e-4)
     assert summary["split"]["fold"] == 2
+
+
+def test_critic_only_ablation_skips_peer_calls():
+    llm = ScriptedLLM(score=1.0)
+    discussion = GraphDiscussion(llm, team(), "task", max_rounds=1, reviews=("critic",))
+
+    discussion.run_round(0)
+
+    assert llm.calls == len(CORE) + 1  # four proposals and one critic call
+    assert all(score == pytest.approx(0.85) for score in discussion.state.scores.values())
+    with pytest.raises(ValueError):
+        GraphDiscussion(llm, team(), "task", reviews=())
+
+
+def test_baselines_can_be_scored_without_a_model(screen, tmp_path):
+    split = prepare_split(screen, tmp_path / "split", seed=3)
+
+    result = score_predictions(None, split["test_h5ad"], split["train_h5ad"], "perturbation")
+
+    assert result["n_scored"] == 2
+    assert result["metrics"]["model"] == {}
+    assert result["metrics"]["mean_shift"]["PCC_delta"] > result["metrics"]["no_change"]["PCC_delta"]
+    assert not result["beats_mean_shift_on_PCC_delta"]
+
+
+def test_rejected_jobs_are_not_run(screen, tmp_path, monkeypatch):
+    import cellforge.Code_Generation as codegen
+    from cellforge.autorun import run_autorun
+
+    script = tmp_path / "result.py"
+    script.write_text("raise SystemExit('should not run')", encoding="utf-8")
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    (plans / "research_plan_1.json").write_text(json.dumps({"task_wise_plan": [{"task_id": "T01"}]}))
+    monkeypatch.setenv("CELLFORGE_WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(codegen, "generate_code_from_plan_task", lambda plan, task_id, output_dir, backend: str(script))
+
+    summary = run_autorun(dataset_path=str(screen), plans_dir=str(plans), approve=lambda code, command: False)
+
+    assert summary["jobs"][0]["status"] == "not_approved"

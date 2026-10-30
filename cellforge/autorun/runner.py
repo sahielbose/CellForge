@@ -18,7 +18,7 @@ import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ..dataset import find_h5ad, is_control, perturbation_key
 from ..paths import data_path, resolve_workspace_path, workspace_root
@@ -139,6 +139,7 @@ def run_autorun(
     split_seed: int = 42,
     codegen_backend: str = "codex",
     timeout_hours: float = 8.0,
+    approve: Optional[Callable[[str, str], bool]] = None,
 ) -> Dict[str, Any]:
     from ..Code_Generation import generate_code_from_plan_task
 
@@ -169,6 +170,9 @@ def run_autorun(
         # local runs use this interpreter; Slurm jobs use the activated environment's python
         command = build_command(Path(code_file), split, logs_dir, sys.executable if executor == "local" else "python")
         env = {"CELLFORGE_PERTURBATION_KEY": split["perturbation_key"]}
+        if approve is not None and not approve(str(code_file), command):
+            jobs.append(JobRecord(task_id, code_file, "not_approved", command, str(logs_dir)))
+            continue
         if executor == "local":
             job = _run_local(task_id, code_file, command, logs_dir, env, timeout_hours)
             if job.status == "completed" and (logs_dir / "predictions.h5ad").exists():

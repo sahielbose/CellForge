@@ -45,6 +45,15 @@ def _latest(root: Path, pattern: str) -> Optional[Path]:
     return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
 
+def approve(question: str) -> bool:
+    """The paper's human checkpoints: a yes from the terminal, and no when nobody is there to answer."""
+
+    if not sys.stdin.isatty():
+        print(f"{question} -> needs an interactive terminal; stopping")
+        return False
+    return input(f"{question} [y/N] ").strip().lower() in {"y", "yes"}
+
+
 def llm_configured() -> bool:
     return any(os.getenv(key) for key in LLM_KEYS) or bool(os.getenv("CUSTOM_API_URL") and os.getenv("CUSTOM_API_KEY"))
 
@@ -127,6 +136,11 @@ def run_code_generation(config: Dict[str, Any]) -> bool:
         print("No research plan found; run the method_design phase first")
         return False
     plan = json.loads(plan_file.read_text(encoding="utf-8"))
+    if config.get("review"):
+        architecture = plan.get("model_architecture", {}).get("name", "unnamed")
+        print(f"Plan {plan_file}\n  source: {plan.get('plan_source')}\n  model: {architecture}\n  {plan.get('summary', '')}")
+        if not approve("Generate code for this plan?"):
+            return False
     out = data_path("codes", plan_file.parent.name)
     out.mkdir(parents=True, exist_ok=True)
     backend = config.get("code_generation", {}).get("backend", "codex")
@@ -164,6 +178,7 @@ def run_autorun_phase(config: Dict[str, Any], args: argparse.Namespace) -> bool:
             split_val_ratio=args.split_val_ratio,
             split_seed=args.split_seed,
             codegen_backend=args.codegen_backend,
+            approve=(lambda code, command: approve(f"Run {code}\n  {command}\n?")) if args.review else None,
         )
     except Exception as exc:
         print(f"Autorun failed: {exc}")
@@ -224,6 +239,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-path", help=".h5ad file or a folder containing one")
     parser.add_argument("--task", help="task description text")
     parser.add_argument("--task-file", help="file containing the task description")
+    parser.add_argument("--review", action="store_true",
+                        help="ask before code generation and before each training job, as in the paper")
     parser.add_argument("--codegen-backend", default=os.getenv("CODEGEN_BACKEND", "codex"), choices=["codex"])
     run = parser.add_argument_group("autorun")
     run.add_argument("--executor", choices=["local", "slurm"], default="local")
@@ -263,6 +280,7 @@ def main() -> bool:
     elif args.task:
         config["task_description"] = args.task.strip()
     config.setdefault("code_generation", {})["backend"] = args.codegen_backend
+    config["review"] = args.review
 
     if args.phase == "autorun":
         return run_autorun_phase(config, args)

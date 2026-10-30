@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Union
 
-from ..llm import LLMInterface
+from ..llm import USAGE, LLMInterface, usage_since
 from ..paths import data_path, resolve_workspace_path
 from ..Task_Analysis.agents import format_evidence
 from .discussion import PLAN_SCHEMA, GraphDiscussion
@@ -41,6 +41,7 @@ def generate_research_plan(
 ) -> Dict[str, Any]:
     if isinstance(task_analysis, str):
         task_analysis = json.loads(Path(task_analysis).read_text(encoding="utf-8"))
+    start = dict(USAGE)
     task_analysis = normalize_task_analysis(task_analysis)
     llm = llm or LLMInterface()
 
@@ -53,6 +54,8 @@ def generate_research_plan(
         task_summary(task_analysis),
         evidence=discussion_evidence(rag_retriever, task_analysis),
         max_rounds=min(20, int(os.getenv("METHOD_DESIGN_MAX_ROUNDS", "6"))),
+        min_rounds=int(os.getenv("METHOD_DESIGN_MIN_ROUNDS", "1")),
+        reviews=tuple(r.strip() for r in os.getenv("METHOD_DESIGN_REVIEWS", "critic,peer").split(",") if r.strip()),
         max_tokens=int(os.getenv("METHOD_DESIGN_MAX_TOKENS_PER_CALL", "900")),
     )
     state = discussion.run()
@@ -65,6 +68,7 @@ def generate_research_plan(
         "consensus_reached": state.consensus_reached,
         "coordination_scores": state.scores,
         "experts": [e.name for e in experts],
+        "llm_usage": usage_since(start),
     }
     trace = getattr(rag_retriever, "last_trace", None)
     result = {

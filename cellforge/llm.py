@@ -125,6 +125,8 @@ class LLMInterface:
         else:
             params.update(temperature=temperature, max_tokens=max_tokens)
         response = client.chat.completions.create(**params)
+        usage = getattr(response, "usage", None)
+        _record(getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0))
         return response.choices[0].message.content
 
     def _anthropic(self, messages, model, temperature, max_tokens) -> str:
@@ -144,7 +146,23 @@ class LLMInterface:
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        usage = getattr(response, "usage", None)
+        _record(getattr(usage, "input_tokens", 0), getattr(usage, "output_tokens", 0))
         return "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
+
+
+# Token use across every client in the process; phases record the difference over their run.
+USAGE: Dict[str, int] = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
+
+
+def usage_since(start: Dict[str, int]) -> Dict[str, int]:
+    return {key: USAGE[key] - start.get(key, 0) for key in USAGE}
+
+
+def _record(prompt_tokens: Optional[int], completion_tokens: Optional[int]) -> None:
+    USAGE["calls"] += 1
+    USAGE["prompt_tokens"] += prompt_tokens or 0
+    USAGE["completion_tokens"] += completion_tokens or 0
 
 
 def parse_json(text: Optional[str]) -> Dict[str, Any]:

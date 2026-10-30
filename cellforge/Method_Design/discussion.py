@@ -6,9 +6,10 @@ the paper:
 
     c_t = 0.3 * c_{t-1} + 0.4 * critic_t + 0.3 * mean(peer_t)
 
-The discussion stops once every expert has c >= 0.8 and the spread of scores is
-below 0.03 (after a minimum number of rounds), or when the round cap is hit. A
-final call turns the transcript into the research plan.
+Scores lie in [0.1, 1.0] and c starts at 0.5. The discussion stops once every
+expert has c >= 0.8 and the largest pairwise difference is below 0.03, or at the
+round cap (the paper uses 20). The critic then turns the top-ranked proposal into
+the research plan, and lower-ranked proposals are dropped.
 """
 
 import json
@@ -37,7 +38,7 @@ PLAN_SCHEMA = {
 
 def clamp(value: Any, default: float = 0.5) -> float:
     try:
-        return max(0.0, min(1.0, float(value)))
+        return max(0.1, min(1.0, float(value)))
     except (TypeError, ValueError):
         return default
 
@@ -59,11 +60,15 @@ class GraphDiscussion:
         task_summary: str,
         evidence: str = "",
         max_rounds: int = 6,
-        min_rounds: int = 3,
+        min_rounds: int = 1,
         threshold: float = 0.8,
         max_spread: float = 0.03,
         max_tokens: int = 900,
+        reviews: tuple = ("critic", "peer"),
     ):
+        if not set(reviews) & {"critic", "peer"}:
+            raise ValueError("The discussion needs critic or peer reviews to score proposals")
+        self.reviews = set(reviews)
         self.llm = llm
         self.experts = experts
         self.task_summary = task_summary
@@ -127,11 +132,11 @@ class GraphDiscussion:
         for expert in self.experts:
             self.state.proposals[expert.name] = self._ask(self._proposal_prompt(expert, round_index))
 
-        critic = self._ask_json(self._critic_prompt())
+        critic = self._ask_json(self._critic_prompt()) if "critic" in self.reviews else {}
         critic_scores = {name: clamp(critic.get("scores", {}).get(name)) for name in self.state.proposals}
         feedback = {name: [f"Critic: {c}"] for name, c in critic.get("comments", {}).items() if name in critic_scores}
         peer_scores: Dict[str, List[float]] = {name: [] for name in self.state.proposals}
-        for reviewer in self.experts:
+        for reviewer in self.experts if "peer" in self.reviews else ():
             review = self._ask_json(self._peer_prompt(reviewer))
             for name, score in review.get("scores", {}).items():
                 if name in peer_scores and name != reviewer.name:
@@ -142,9 +147,11 @@ class GraphDiscussion:
 
         for name in self.state.scores:
             peers = peer_scores.get(name) or [0.5]
-            self.state.scores[name] = (
-                0.3 * self.state.scores[name] + 0.4 * critic_scores.get(name, 0.5) + 0.3 * sum(peers) / len(peers)
-            )
+            # paper weights 0.4 critic and 0.3 peer; an ablated source gives its weight to the other
+            parts = {"critic": (0.4, critic_scores.get(name, 0.5)), "peer": (0.3, sum(peers) / len(peers))}
+            used = [parts[k] for k in ("critic", "peer") if k in self.reviews]
+            review = sum(w * v for w, v in used) / sum(w for w, _ in used)
+            self.state.scores[name] = 0.3 * self.state.scores[name] + 0.7 * review
         self.state.feedback = feedback
         record = {
             "round": round_index + 1,
@@ -175,22 +182,25 @@ class GraphDiscussion:
         return self.state
 
     def synthesize(self) -> Optional[Dict[str, Any]]:
-        """Merge the final proposals into one plan, weighting experts by coordination score."""
+        """The critic's editorial decision: write up the top-ranked proposal with its open reviews."""
 
-        ranked = sorted(self.state.proposals, key=lambda n: self.state.scores.get(n, 0), reverse=True)
-        proposals = "\n\n".join(
-            f"### {name} (coordination score {self.state.scores.get(name, 0):.2f})\n{self.state.proposals[name]}"
-            for name in ranked
-        )
+        if not self.state.proposals:
+            return None
+        best = max(self.state.proposals, key=lambda n: self.state.scores.get(n, 0))
+        reviews = "\n".join(f"- {line}" for line in self.state.feedback.get(best, [])) or "- none"
         prompt = (
-            f"Merge these expert proposals into one research plan for the task below. Prefer the "
-            f"higher-scored proposals where they conflict, keep only components that are justified, and "
-            f"cite evidence IDs.\n\nTASK\n{self.task_summary}\n\nPROPOSALS\n{proposals}\n\n"
-            f"Return only JSON with this structure:\n{json.dumps(PLAN_SCHEMA, indent=2)}"
+            f"Write the research plan as the area chair. The {best}'s proposal ranked first "
+            f"(coordination score {self.state.scores.get(best, 0):.2f}) and is the one selected; do not "
+            f"add components from other proposals. Apply the open review points and keep its evidence IDs."
+            f"\n\nTASK\n{self.task_summary}\n\nSELECTED PROPOSAL\n{self.state.proposals[best]}\n\n"
+            f"OPEN REVIEWS\n{reviews}\n\nReturn only JSON with this structure:\n{json.dumps(PLAN_SCHEMA, indent=2)}"
         )
         try:
             plan = parse_json(self._ask(prompt, max_tokens=3000))
         except Exception as exc:
             print(f"Plan synthesis failed: {exc}")
             return None
-        return plan if isinstance(plan.get("model_architecture"), dict) else None
+        if not isinstance(plan.get("model_architecture"), dict):
+            return None
+        plan["selected_proposal"] = best
+        return plan

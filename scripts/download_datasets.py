@@ -31,7 +31,7 @@ DATASETS = {
     "srivatsan": ("small molecules at several doses (sci-Plex 3), scRNA-seq", "GSE139944", [
         ("SrivatsanTrapnell2020_sciplex3.h5ad", RNA, 2526631614, "c9e70629505d98c7ca1a837f62b14e89"),
     ]),
-    "schiebinger": ("reprogramming time course, scRNA-seq", "GSE106340", [
+    "schiebinger": ("time course of mouse fibroblast reprogramming, scRNA-seq", "GSE106340", [
         ("SchiebingerLander2019_GSE106340.h5ad", RNA, 378858726, "8d988c345930195ea6e64a05c762abb3"),
     ]),
     "papalexi": ("CRISPR, ECCITE-seq RNA and surface protein", "GSE153056", [
@@ -85,12 +85,15 @@ def fetch(name: str, record: str, expected: str, dest: Path) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("datasets", nargs="*", choices=[[], *DATASETS], metavar="dataset", help=", ".join(DATASETS))
+    parser.add_argument("datasets", nargs="*", metavar="dataset", help=", ".join(DATASETS))
     parser.add_argument("--all", action="store_true", help="download all six")
     parser.add_argument("--list", action="store_true", help="list the datasets and exit")
     parser.add_argument("--out", default="data/datasets", help="destination folder")
     parser.add_argument("--dry-run", action="store_true", help="show what would be downloaded")
     args = parser.parse_args()
+    unknown = sorted(set(args.datasets) - set(DATASETS))
+    if unknown:
+        parser.error(f"unknown dataset {', '.join(unknown)}; choose from {', '.join(DATASETS)}")
 
     if args.list or not (args.datasets or args.all):
         for key, (description, accession, files) in DATASETS.items():

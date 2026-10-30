@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..dataset import infer_task_type
+from ..llm import USAGE, usage_since
 from ..paths import data_path
 from .agents import BaselineAssessor, DatasetAnalyst, ProblemInvestigator, RefinementAgent
 from .report import TaskAnalysisReport
@@ -32,6 +33,7 @@ def run_task_analysis(
 ) -> TaskAnalysisReport:
     from ..retrieval import LiteratureRetriever
 
+    start = dict(USAGE)
     dataset_info = dataset_info or {}
     retriever = retriever or LiteratureRetriever.from_env()
     evidence = gather_evidence(retriever, task_description, dataset_info)
@@ -44,11 +46,11 @@ def run_task_analysis(
 
     rounds = int(os.getenv("TASK_ANALYSIS_MAX_REFINEMENT_ROUNDS", "2"))
     report = RefinementAgent(llm, max_rounds=rounds).refine(task_description, dataset_info, evidence, analyses)
-    save_report(report, task_description, dataset_info, retriever, output_dir)
+    save_report(report, task_description, dataset_info, retriever, output_dir, usage_since(start))
     return report
 
 
-def save_report(report, task_description, dataset_info, retriever, output_dir=None) -> Path:
+def save_report(report, task_description, dataset_info, retriever, output_dir=None, llm_usage=None) -> Path:
     out = Path(output_dir or os.getenv("TASK_ANALYSIS_OUTPUT_DIR") or data_path("analyses", "unknown_dataset"))
     out.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -59,7 +61,7 @@ def save_report(report, task_description, dataset_info, retriever, output_dir=No
         "dataset_info": dataset_info,
         "task_type": infer_task_type(task_description, dataset_info),
         "analysis_results": report.to_dict(),
-        "metadata": {"version": "2.0", "retrieval": trace.to_dict() if trace else None},
+        "metadata": {"version": "2.0", "retrieval": trace.to_dict() if trace else None, "llm_usage": llm_usage},
     }
     path = out / f"task_analysis_{stamp}.json"
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
