@@ -23,6 +23,7 @@ class CodeGenerationBackend(ABC):
         research_plan: Dict[str, Any],
         output_dir: str = "data/codes",
         task_id: Optional[str] = None,
+        smoke_dir: Optional[Path] = None,
     ) -> Optional[str]:
         """Generate a Python file and return its path."""
 

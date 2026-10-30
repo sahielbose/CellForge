@@ -126,7 +126,8 @@ def run_method_design(config: Dict[str, Any]) -> bool:
 
 
 def run_code_generation(config: Dict[str, Any]) -> bool:
-    from cellforge.autorun.runner import code_for, plan_task_ids
+    from cellforge.autorun.runner import code_for, plan_task_ids, smoke_set
+    from cellforge.dataset import find_h5ad
 
     print("\n== Phase 3: code generation ==")
     dataset_path = config.get("dataset_path")
@@ -142,12 +143,13 @@ def run_code_generation(config: Dict[str, Any]) -> bool:
         if not approve("Generate code for this plan?"):
             return False
     backend = config.get("code_generation", {}).get("backend", "codex")
+    smoke = smoke_set(find_h5ad(str(resolve_workspace_path(dataset_path))), plan_file) if dataset_path else None
     task_id = os.getenv("CODEGEN_TASK_ID", "").strip()
     tasks = [task_id] if task_id else plan_task_ids(plan)
     written = 0
     for task in tasks:
         try:
-            code = code_for(plan, plan_file, task, backend)
+            code = code_for(plan, plan_file, task, backend, smoke)
         except Exception as exc:
             print(f"{task}: code generation failed: {exc}")
             continue
@@ -178,6 +180,11 @@ def run_autorun_phase(config: Dict[str, Any], args: argparse.Namespace) -> bool:
             split_seed=args.split_seed,
             codegen_backend=args.codegen_backend,
             approve=(lambda code, command: approve(f"Run {code}\n  {command}\n?")) if args.review else None,
+            refine_rounds=args.refine_rounds,
+            refine_branches=args.refine_branches,
+            refine_metric=args.refine_metric,
+            flush_at=[float(x) for x in args.flush_at.split(",") if x.strip()],
+            select_ratio=args.select_ratio,
         )
     except Exception as exc:
         print(f"Autorun failed: {exc}")
@@ -187,6 +194,9 @@ def run_autorun_phase(config: Dict[str, Any], args: argparse.Namespace) -> bool:
         line = f"{job['task_id']}: {job['status']}"
         if score.get("model"):
             line += f"  PCC_delta {score['model']['PCC_delta']:.3f} (mean-shift {score['mean_shift']['PCC_delta']:.3f})"
+        if job.get("refinement"):
+            kept = sum(a["outcome"] == "kept" for a in job["refinement"]["attempts"])
+            line += f"  refinement kept {kept} of {len(job['refinement']['attempts'])} edits"
         print(line)
     if args.executor == "slurm":
         print(f"After the jobs finish: python -m cellforge.autorun.scoring {summary['run_root']}")
@@ -249,6 +259,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--fold", type=int, default=0, help="which fold to hold out for test")
     run.add_argument("--split-val-ratio", type=float, default=0.1, help="share of perturbations held out for validation")
     run.add_argument("--split-seed", type=int, default=42)
+    loop = parser.add_argument_group("refinement loop (off by default; see docs/EXPERIMENTS.md, condition C1)")
+    loop.add_argument("--refine-rounds", type=int, default=0, help="rounds of edit, train and score per task")
+    loop.add_argument("--refine-branches", type=int, default=1, help="independent edits tried per round")
+    loop.add_argument("--refine-metric", default="PCC_delta",
+                      choices=["PCC_delta", "MSE_DE", "PCC_DE", "Recall", "AUROC", "MSE", "PCC"],
+                      help="selection metric a candidate must improve")
+    loop.add_argument("--flush-at", default="", help="fractions of the rounds at which to clear the journal, e.g. 0.33,0.66")
+    loop.add_argument("--select-ratio", type=float, default=None,
+                      help="share of perturbations held out for selection (0.1 when refining, else 0)")
     run.add_argument("--partition", default="gpu")
     run.add_argument("--slurm-time", default="08:00:00")
     run.add_argument("--cpus-per-task", type=int, default=4)

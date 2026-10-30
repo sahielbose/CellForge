@@ -23,9 +23,16 @@ def generate_code_from_plan(research_plan, output_dir="data/codes", backend=None
     return generator.generate_code(research_plan, output_dir=output_dir)
 
 
-def generate_code_from_plan_task(research_plan, task_id, output_dir="data/codes", backend=None):
+def generate_code_from_plan_task(research_plan, task_id, output_dir="data/codes", backend=None, smoke_dir=None):
     generator = create_backend(backend)
-    return generator.generate_code(research_plan, output_dir=output_dir, task_id=task_id)
+    return generator.generate_code(research_plan, output_dir=output_dir, task_id=task_id, smoke_dir=smoke_dir)
+
+
+def improve_code(research_plan, script, report, output_dir, task_id=None, backend=None, smoke_dir=None):
+    """Ask the coding agent for one change to a verified script; returns (new script or None, summary)."""
+
+    generator = create_backend(backend)
+    return generator.improve_code(research_plan, script, report, output_dir, task_id=task_id, smoke_dir=smoke_dir)
 
 
 __all__ = [
@@ -39,6 +46,7 @@ __all__ = [
     "create_backend",
     "generate_code_from_plan",
     "generate_code_from_plan_task",
+    "improve_code",
     "list_backends",
     "run_with_verification",
     "verify_generated_code",

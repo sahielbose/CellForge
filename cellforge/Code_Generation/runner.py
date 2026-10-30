@@ -13,7 +13,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from .codex_events import AgentEventLog, CodexJsonlRecorder, safe_text
 from .contracts import AgentRunRequest, AgentRunResult
-from .prompts import build_generation_prompt, build_repair_prompt
+from .prompts import build_generation_prompt, build_improvement_prompt, build_repair_prompt
 
 DEFAULT_ACCEPTANCE_CONTRACT = {
     "entrypoint": "result.py",
@@ -65,6 +65,9 @@ def prepare_workspace(request: AgentRunRequest) -> None:
     contract_path = request.workspace / "acceptance_contract.json"
     if not contract_path.exists():
         contract_path.write_text(json.dumps(contract, indent=2) + "\n", encoding="utf-8")
+
+    if request.smoke_dir and not (request.workspace / "smoke").exists():
+        shutil.copytree(request.smoke_dir, request.workspace / "smoke")
 
     instructions_path = request.workspace / "AGENTS.md"
     if not instructions_path.exists():
@@ -127,11 +130,13 @@ def execute_agent(
     final_message_path = logs_dir / f"{backend}_attempt_{request.attempt:02d}.txt"
     recorder = AgentEventLog(event_log)
     before = _snapshot(request.workspace)
-    prompt = (
-        build_repair_prompt(request.feedback, request.entrypoint)
-        if request.feedback
-        else build_generation_prompt(request.research_plan, request.entrypoint)
-    )
+    smoke = (request.workspace / "smoke").exists()
+    if request.feedback:
+        prompt = build_repair_prompt(request.feedback, request.entrypoint)
+    elif request.instruction:
+        prompt = build_improvement_prompt(request.instruction, request.entrypoint, smoke)
+    else:
+        prompt = build_generation_prompt(request.research_plan, request.entrypoint, smoke)
     command, env = command_factory(request, final_message_path)
     recorder.append(
         "agent_started",

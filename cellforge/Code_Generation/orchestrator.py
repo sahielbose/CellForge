@@ -59,7 +59,8 @@ def _record_orchestration_event(result: AgentRunResult, event: str, **details) -
 
 def _verify(result: AgentRunResult) -> VerificationResult:
     _record_orchestration_event(result, "verification_started")
-    verification = verify_generated_code(result.output_path, workspace=result.workspace)
+    smoke = "smoke" if (result.workspace / "smoke" / "predict.json").exists() else None
+    verification = verify_generated_code(result.output_path, workspace=result.workspace, smoke_dir=smoke)
     report_path = _write_verification_report(result, verification)
     _record_orchestration_event(
         result,

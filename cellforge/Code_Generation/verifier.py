@@ -28,6 +28,7 @@ class VerificationCommand:
     name: str
     argv: Sequence[str]
     timeout_seconds: int = 60
+    env: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -48,6 +49,9 @@ class VerificationContract:
     result_json: Optional[str] = None
     required_result_fields: Sequence[str] = field(default_factory=tuple)
     required_flags: Sequence[str] = AUTORUN_FLAGS
+    # a smoke/ folder from autorun.smoke: run the script on it and check the predictions it writes
+    smoke_dir: Optional[str] = None
+    smoke_timeout_seconds: int = 600
 
 
 @dataclass(frozen=True)
@@ -211,6 +215,8 @@ class CodeGenerationVerifier:
                     )
             for command in contract.commands or ():
                 checks.append(self._run_command(workspace_path, command))
+            if contract.smoke_dir and all(check.passed for check in checks):
+                checks.extend(self._smoke_run(workspace_path, contract))
 
         if contract.result_json:
             checks.append(self._check_result_json(workspace_path, contract))
@@ -242,7 +248,7 @@ class CodeGenerationVerifier:
             for key, value in os.environ.items()
             if not re.search(r"(API_KEY|TOKEN|SECRET|PASSWORD)", key, re.IGNORECASE)
         }
-        env.update({"PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1"})
+        env.update({"PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1", **command.env})
         try:
             completed = subprocess.run(
                 argv,
@@ -285,6 +291,55 @@ class CodeGenerationVerifier:
             exit_code=completed.returncode,
             stdout_tail=self._tail(completed.stdout),
             stderr_tail=self._tail(completed.stderr),
+        )
+
+    def _smoke_run(self, workspace: Path, contract: VerificationContract) -> List[VerificationCheck]:
+        """Train on the stand-in data with CELLFORGE_SMOKE=1, then check the predictions file."""
+
+        smoke = Path(contract.smoke_dir)
+        schema = json.loads((workspace / smoke / "schema.json").read_text(encoding="utf-8"))
+        out = smoke / "out"
+        (workspace / out).mkdir(parents=True, exist_ok=True)
+        args = {"--adata-path": smoke / "train.h5ad", "--val-adata-path": smoke / "val.h5ad",
+                "--output-metrics": out / "val_metrics.json", "--predict-perturbations": smoke / "predict.json",
+                "--predictions-out": out / "predictions.h5ad"}
+        run = self._run_command(workspace, VerificationCommand(
+            name="smoke_run",
+            argv=(sys.executable, contract.entrypoint, *[str(v) for pair in args.items() for v in pair]),
+            timeout_seconds=contract.smoke_timeout_seconds,
+            env={"CELLFORGE_SMOKE": "1", "CELLFORGE_PERTURBATION_KEY": schema["perturbation_key"]},
+        ))
+        if not run.passed:
+            return [run]
+        return [run, self._check_predictions(workspace / out / "predictions.h5ad",
+                                             json.loads((workspace / smoke / "predict.json").read_text()), schema)]
+
+    @staticmethod
+    def _check_predictions(path: Path, requested: List[str], schema: Dict[str, Any]) -> VerificationCheck:
+        problems = []
+        try:
+            import anndata as ad
+            import numpy as np
+
+            pred = ad.read_h5ad(path)
+            key = schema["perturbation_key"]
+            if key not in pred.obs:
+                problems.append(f"obs has no '{key}' column naming each predicted perturbation")
+            else:
+                missing = sorted(set(requested) - set(pred.obs[key].astype(str)))
+                if missing:
+                    problems.append(f"no prediction for {', '.join(missing)}")
+            values = pred.X.toarray() if hasattr(pred.X, "toarray") else np.asarray(pred.X)
+            if not np.isfinite(values).all():
+                problems.append("X contains NaN or infinite values")
+            if pred.n_vars < 0.5 * schema["n_genes"]:
+                problems.append(f"only {pred.n_vars} of {schema['n_genes']} genes predicted")
+        except Exception as exc:  # any unreadable file is a failed check, not a crash
+            problems.append(f"predictions file could not be read: {exc}")
+        return VerificationCheck(
+            name="smoke_predictions",
+            passed=not problems,
+            message="; ".join(problems) or "Predictions cover every requested perturbation with finite values",
         )
 
     def _check_result_json(
@@ -359,6 +414,7 @@ def verify_generated_code(
     result_json: Optional[str] = None,
     required_result_fields: Sequence[str] = (),
     command_timeout_seconds: int = 60,
+    smoke_dir: Optional[str] = None,
 ) -> VerificationResult:
     """Convenience API for runners that have only a generated code path.
 
@@ -395,6 +451,8 @@ def verify_generated_code(
             commands=commands,
             result_json=result_json,
             required_result_fields=required_result_fields,
+            smoke_dir=smoke_dir,
+            smoke_timeout_seconds=int(os.getenv("CODEGEN_SMOKE_TIMEOUT", "600")),
         ),
     )
 

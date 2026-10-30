@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -106,6 +107,7 @@ class CodexCodeGenerator(CodeGenerationBackend):
         research_plan: Dict[str, Any],
         output_dir: str = "data/codes",
         task_id: Optional[str] = None,
+        smoke_dir: Optional[Path] = None,
     ) -> Optional[str]:
         """Compatibility entrypoint returning the published Python file path."""
 
@@ -117,6 +119,7 @@ class CodexCodeGenerator(CodeGenerationBackend):
                 workspace=workspace,
                 task_id=task_id,
                 model=self.model,
+                smoke_dir=smoke_dir,
             )
             result, _verification = run_with_verification(self, request)
             if result.status != "completed":
@@ -125,3 +128,35 @@ class CodexCodeGenerator(CodeGenerationBackend):
         except Exception as exc:
             logger.error("Error during Codex code generation: %s", exc)
             return None
+
+    def improve_code(
+        self,
+        research_plan: Dict[str, Any],
+        script: str,
+        report: str,
+        output_dir: str,
+        task_id: Optional[str] = None,
+        smoke_dir: Optional[Path] = None,
+    ) -> Tuple[Optional[str], str]:
+        """One refinement turn: copy a verified script into a fresh workspace and ask for one change.
+
+        Returns the verified new script, or None, and the agent's description of the change.
+        """
+
+        try:
+            workspace = create_task_workspace(output_dir, self.name, task_id)
+            shutil.copy2(script, workspace / "result.py")
+            request = AgentRunRequest(
+                research_plan=self.scoped_plan(research_plan, task_id),
+                workspace=workspace,
+                task_id=task_id,
+                model=self.model,
+                instruction=report,
+                smoke_dir=smoke_dir,
+            )
+            result, _verification = run_with_verification(self, request)
+            summary = (result.final_message or result.error or "").strip()
+            return publish_compatibility_artifact(result, self.output_file(output_dir, task_id)), summary
+        except Exception as exc:
+            logger.error("Error during Codex refinement: %s", exc)
+            return None, str(exc)

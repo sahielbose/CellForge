@@ -379,7 +379,7 @@ def test_autorun_runs_and_scores_a_generated_script(screen, tmp_path, monkeypatc
     monkeypatch.setenv("CELLFORGE_WORKSPACE_DIR", str(tmp_path))
     calls = []
     monkeypatch.setattr(codegen, "generate_code_from_plan_task",
-                        lambda plan, task_id, output_dir, backend: calls.append(task_id) or str(script))
+                        lambda plan, task_id, output_dir, backend, **_: calls.append(task_id) or str(script))
 
     summary = run_autorun(dataset_path=str(screen), plans_dir=str(plans), fold=2)
     run_autorun(dataset_path=str(screen), plans_dir=str(plans), fold=3)
@@ -412,7 +412,7 @@ def test_code_generation_phase_and_autorun_share_one_script(screen, tmp_path, mo
     monkeypatch.setenv("CELLFORGE_WORKSPACE_DIR", str(tmp_path))
     calls = []
     monkeypatch.setattr(codegen, "generate_code_from_plan_task",
-                        lambda plan, task_id, output_dir, backend: calls.append(task_id) or str(script))
+                        lambda plan, task_id, output_dir, backend, **_: calls.append(task_id) or str(script))
 
     assert cli.run_code_generation({"dataset_path": str(screen)})
     summary = run_autorun(dataset_path=str(screen), fold=1)
@@ -454,7 +454,7 @@ def test_rejected_jobs_are_not_run(screen, tmp_path, monkeypatch):
     plans.mkdir()
     (plans / "research_plan_1.json").write_text(json.dumps({"task_wise_plan": [{"task_id": "T01"}]}))
     monkeypatch.setenv("CELLFORGE_WORKSPACE_DIR", str(tmp_path))
-    monkeypatch.setattr(codegen, "generate_code_from_plan_task", lambda plan, task_id, output_dir, backend: str(script))
+    monkeypatch.setattr(codegen, "generate_code_from_plan_task", lambda plan, task_id, output_dir, backend, **_: str(script))
 
     summary = run_autorun(dataset_path=str(screen), plans_dir=str(plans), approve=lambda code, command: False)
 

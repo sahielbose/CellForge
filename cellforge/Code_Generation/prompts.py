@@ -40,10 +40,16 @@ COMMAND LINE (autorun calls exactly these flags):
 Held-out perturbations are scored by the harness, not by this script, against a mean-shift baseline."""
 
 
-def build_generation_prompt(research_plan: Dict[str, Any], entrypoint: str = "result.py") -> str:
+SMOKE_NOTE = """
+SMOKE RUN: smoke/ holds a small stand-in dataset with the real gene names, obs columns and labels but no real
+perturbation effect. The verifier runs your script on it with the five flags above and CELLFORGE_SMOKE=1, within a
+time limit of a few minutes, and checks the predictions file. When CELLFORGE_SMOKE=1, train for only a few steps."""
+
+
+def build_generation_prompt(research_plan: Dict[str, Any], entrypoint: str = "result.py", smoke: bool = False) -> str:
     research_plan_json = json.dumps(research_plan, indent=2, ensure_ascii=False)
     return (
-        f"{SYSTEM_PROMPT.format(entrypoint=entrypoint)}\n\n"
+        f"{SYSTEM_PROMPT.format(entrypoint=entrypoint)}{SMOKE_NOTE if smoke else ''}\n\n"
         "The plan is materialized in research_plan.json. For convenience, its content is also below.\n\n"
         f"RESEARCH PLAN:\n{research_plan_json}"
     )
@@ -61,3 +67,19 @@ VERIFIER FEEDBACK:
 {feedback}
 
 Ensure {entrypoint} is non-empty before finishing. Summarize changes and checks in the final response."""
+
+
+def build_improvement_prompt(report: str, entrypoint: str = "result.py", smoke: bool = False) -> str:
+    return f"""Continue the CellForge modeling task in the current workspace. {entrypoint} implements
+research_plan.json and passed verification, and the harness has trained it and scored its predictions.
+
+Read research_plan.json, acceptance_contract.json and {entrypoint}. Make one focused change that you expect to
+raise the score below on perturbations the model has not seen, for example to the architecture, the loss, the input
+features or the training schedule. Keep the command line, the output format and the evaluation protocol unchanged,
+read no data except the files passed on the command line, and do not try to tell which of the requested
+perturbations are scored. Work only inside the current workspace and do not download dependencies.
+{SMOKE_NOTE if smoke else ""}
+
+{report}
+
+Ensure {entrypoint} is non-empty before finishing. In the final response, state the change in one or two sentences."""

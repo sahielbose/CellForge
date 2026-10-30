@@ -19,6 +19,10 @@ class AgentRunRequest:
     timeout_seconds: int = 1800
     attempt: int = 1
     feedback: Optional[str] = None
+    # a change to make to an existing, verified entrypoint (the refinement loop in autorun.refine)
+    instruction: Optional[str] = None
+    # stand-in data from autorun.smoke, copied to smoke/ for the verifier's smoke run
+    smoke_dir: Optional[Path] = None
 
 
 @dataclass
