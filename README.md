@@ -1,8 +1,30 @@
-# CellForge
+<div align="center">
 
-CellForge is a multi-agent system that takes a single-cell perturbation dataset and a research question and returns a trained model with a score on perturbations it has never seen. It was introduced by Tang et al. in [*CellForge: Agentic Design of Virtual Cell Models*](https://arxiv.org/abs/2508.02276) from the Gerstein Lab at Yale. This repository is a rewrite of [gersteinlab/CellForge](https://github.com/gersteinlab/CellForge) in which each phase now consumes the previous phase's output, and every model is scored on held-out perturbations with the metric definitions from the paper's Methods.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figs/mark-dark.svg">
+  <img src="figs/mark.svg" width="84" alt="">
+</picture>
 
-[Paper](https://arxiv.org/abs/2508.02276) &nbsp;·&nbsp; [Results in the paper](docs/RESULTS.md) &nbsp;·&nbsp; [Datasets](docs/DATASETS.md) &nbsp;·&nbsp; [GPU benchmark plan](docs/EXPERIMENTS.md)
+<h1>CellForge</h1>
+
+<p>A multi-agent system that designs, codes and trains single-cell perturbation models,<br>and scores each one on perturbations it has never seen.</p>
+
+<p>
+<a href="https://github.com/sahielbose/CellForge/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/sahielbose/CellForge/ci.yml?branch=main&style=flat-square&label=tests" alt="tests"></a> <a href="https://arxiv.org/abs/2508.02276"><img src="https://img.shields.io/badge/arXiv-2508.02276-b31b1b?style=flat-square" alt="arXiv 2508.02276"></a> <a href="setup.py"><img src="https://img.shields.io/badge/python-3.10%20to%203.12-3554b8?style=flat-square" alt="Python 3.10 to 3.12"></a> <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-59636e?style=flat-square" alt="MIT license"></a>
+</p>
+
+<p>
+<a href="https://arxiv.org/abs/2508.02276">Paper</a> &nbsp;·&nbsp;
+<a href="docs/RESULTS.md">Results in the paper</a> &nbsp;·&nbsp;
+<a href="docs/DATASETS.md">Datasets</a> &nbsp;·&nbsp;
+<a href="docs/EXPERIMENTS.md">GPU benchmark plan</a>
+</p>
+
+</div>
+
+<br>
+
+CellForge was introduced by Tang et al. in [*CellForge: Agentic Design of Virtual Cell Models*](https://arxiv.org/abs/2508.02276) from the Gerstein Lab at Yale. Given a perturbation dataset and a research question, it analyzes the data, holds a structured discussion between expert agents to design a model, has a coding agent implement it, and trains and scores the result. This repository is a rewrite of [gersteinlab/CellForge](https://github.com/gersteinlab/CellForge) in which each phase consumes the previous phase's output and every model is scored on held-out perturbations with the metric definitions from the paper's Methods.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="figs/pipeline-dark.svg">
@@ -19,7 +41,9 @@ The code is in `cellforge/Task_Analysis`. The dataset file is opened in backed m
 
 The code is in `cellforge/Method_Design`. A team of four experts (data engineering, single-cell biology, deep learning, training) is extended with specialists an LLM picks for the task. In each round every expert drafts or revises a proposal, a critic scores all proposals in one call, and each expert reviews the others. Each expert's coordination score follows the update in the paper,
 
-$$c_t = 0.3\,c_{t-1} + 0.4\,\text{critic}_t + 0.3\,\overline{\text{peer}}_t ,$$
+```math
+c_t = 0.3\,c_{t-1} + 0.4\,\text{critic}_t + 0.3\,\overline{\text{peer}}_t
+```
 
 with reviews bounded to [0.1, 1.0] and every score starting at 0.5. The discussion stops once every score is at least 0.8 and no two differ by 0.03 or more. The critic then writes up the top-ranked proposal as the research plan, applying its open review points, and the other proposals are dropped, as the paper describes. If that call fails, the saved plan says so in its `plan_source` field.
 
@@ -80,7 +104,12 @@ Each phase can also run alone with `--phase task_analysis`, `method_design`, `co
 
 ## Changes from the upstream code
 
-The original repository had the three phases, but several of them did not pass their results on. Each change below was checked against upstream commit `6585ff9`.
+<details>
+<summary>What was fixed, checked against upstream commit <code>6585ff9</code></summary>
+
+<br>
+
+The original repository had the three phases, but several of them did not pass their results on.
 
 | Upstream behavior | This version |
 |---|---|
@@ -92,9 +121,14 @@ The original repository had the three phases, but several of them did not pass t
 | TLS verification was disabled for DeepSeek, Llama, Qwen and custom endpoints, prompts were logged, and generated code ran with API keys in its environment | verification on, no prompt logging, secrets removed from the environment of generated code |
 | `temperature=0` became 0.7, reasoning models rejected `max_tokens`, and chat calls kept only the last user message | fixed |
 
-Unused code went with it: the legacy RAG system, the OpenHands backend, the Node SDK runner, about 2,000 lines of expert persona text that nothing read, and several agent variants. The Python went from 20,345 lines to 5,851, and the tests cover the split, the scorer, the discussion arithmetic, refinement, the hand-off between phases and an autorun round trip.
+Unused code went with it: the legacy RAG system, the OpenHands backend, the Node SDK runner, about 2,000 lines of expert persona text that nothing read, and several agent variants. The Python went from 20,345 lines to 6,192, and the tests cover the split, the scorer, the discussion arithmetic, refinement, the hand-off between phases and an autorun round trip.
+
+</details>
 
 ## Repository layout
+
+<details>
+<summary>Where each part of the pipeline lives</summary>
 
 ```
 main.py                       command line (the `cellforge` entry point)
@@ -106,7 +140,10 @@ cellforge/Method_Design/      expert pool, graph discussion, plan synthesis
 cellforge/Code_Generation/    Codex backend, verifier, repair loop
 cellforge/autorun/            five-fold split, local and Slurm runs, scoring
 scripts/download_datasets.py  the six benchmark datasets from scPerturb, checksum-verified
+scripts/make_figures.py       every figure in this README and in docs/, light and dark
 ```
+
+</details>
 
 ## Citation
 
