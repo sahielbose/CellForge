@@ -147,7 +147,7 @@ class RefinementAgent(AnalysisAgent):
         evidence: List[Dict[str, Any]],
         analyses: List[AnalysisResult],
     ) -> TaskAnalysisReport:
-        current = dict(zip(self.sections, analyses))
+        current = dict(zip(self.sections, analyses, strict=True))
         history = []
         for _ in range(self.max_rounds):
             review = self._run_llm(self._review_prompt(task, dataset, evidence, current))

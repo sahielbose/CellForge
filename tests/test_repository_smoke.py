@@ -39,7 +39,7 @@ def test_duplicate_entrypoints_are_removed():
     assert "cellforge=main:cli_entrypoint" in (ROOT / "setup.py").read_text(
         encoding="utf-8"
     )
-    assert 'python_requires=">=3.9,<3.13"' in (ROOT / "setup.py").read_text(
+    assert 'python_requires=">=3.10,<3.13"' in (ROOT / "setup.py").read_text(
         encoding="utf-8"
     )
 

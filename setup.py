@@ -22,7 +22,7 @@ setup(
     entry_points={"console_scripts": ["cellforge=main:cli_entrypoint"]},
     install_requires=REQUIREMENTS,
     extras_require={"pdf": ["pymupdf>=1.22"], "dev": ["pytest>=7.0", "ruff>=0.4"]},
-    python_requires=">=3.9,<3.13",
+    python_requires=">=3.10,<3.13",
     classifiers=[
         "Intended Audience :: Science/Research",
         "License :: OSI Approved :: MIT License",
