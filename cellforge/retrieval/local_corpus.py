@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import json
+import re
 from hashlib import sha256
 from pathlib import Path
 from typing import List
-import json
-import re
 
 from .models import PaperRecord
 
@@ -18,6 +18,7 @@ class LocalCorpusProvider:
         self.root = Path(root).expanduser().resolve()
         self.papers_dir = self.root / "papers"
         self.cache_dir = self.root / "cache" / "extracted_text"
+        self._digests = {}  # (path, size, mtime) -> sha256, so each PDF is hashed once per run
 
     def _extract_pdf(self, path: Path, digest: str) -> List[tuple[int, str]]:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -57,7 +58,11 @@ class LocalCorpusProvider:
             return []
         best_by_path = {}
         for path in sorted(self.papers_dir.glob("*.pdf")):
-            digest = sha256(path.read_bytes()).hexdigest()
+            stat = path.stat()
+            key = (str(path), stat.st_size, stat.st_mtime_ns)
+            if key not in self._digests:
+                self._digests[key] = sha256(path.read_bytes()).hexdigest()
+            digest = self._digests[key]
             title_score = self._score(query, path.stem)
             pages = self._extract_pdf(path, digest)
             for page, text in pages:

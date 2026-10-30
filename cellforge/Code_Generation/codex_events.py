@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)([\"']?(?:[a-z0-9_]*api[_-]?key|[a-z0-9_]*token|password)"
     r"[\"']?\s*[:=]\s*[\"']?)([^\"'\s,}]+)"

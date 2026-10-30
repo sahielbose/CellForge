@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
 import json
 import os
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
 
+from ..paths import data_path, resolve_workspace_path
 from .local_corpus import LocalCorpusProvider
 from .models import PaperRecord, RetrievalTrace
 from .providers import CrossrefProvider, PubMedProvider, SemanticScholarProvider
-from ..paths import data_path, resolve_workspace_path
 
 
 class LiteratureRetriever:
@@ -183,8 +183,8 @@ class LiteratureRetriever:
         use that stable token plus the assay family for primary discovery.
         """
         dataset_name = str(dataset_info.get("dataset_name", "")).strip()
-        author_match = re.match(r"([A-Z][a-z]+)", dataset_name)
-        author = author_match.group(1) if author_match else ""
+        author_match = re.match(r"[A-Za-z][a-z]+", dataset_name)
+        author = author_match.group(0).capitalize() if author_match else ""
         perturbation = str(dataset_info.get("perturbation_type", "")).lower()
         modality = str(dataset_info.get("data_type", "")).lower()
         if "crispr" in perturbation:

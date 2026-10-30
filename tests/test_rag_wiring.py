@@ -4,10 +4,9 @@ import sys
 import types
 from pathlib import Path
 
-from cellforge.Method_Design.expert_discussion import ExpertDiscussion
-from cellforge.Task_Analysis.refinement_agent import RefinementAgent
+from cellforge.Method_Design import discussion_evidence
 from cellforge.retrieval import LiteratureRetriever
-
+from cellforge.Task_Analysis.agents import RefinementAgent
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -114,10 +113,6 @@ def test_cli_entrypoint_maps_phase_failure_to_exit_one(monkeypatch):
 
 
 def test_method_design_formats_unified_retrieval_contract():
-    class FakeLLM:
-        def get_config_status(self):
-            return {"custom_configured": True, "model_name": "fixture"}
-
     class UnifiedRetriever:
         def retrieve(self, query, top_k=5):
             return [{
@@ -128,9 +123,8 @@ def test_method_design_formats_unified_retrieval_contract():
                 "evidence_id": "cf:doi:10.1016/j.cell.2016.11.048",
             }]
 
-    discussion = ExpertDiscussion(FakeLLM(), rag_retriever=UnifiedRetriever())
-    context = discussion._get_relevant_knowledge(
-        "deep_learning", "gene_knockout", "proposal"
+    context = discussion_evidence(
+        UnifiedRetriever(), {"task_type": "genetic_perturbation", "dataset": {"name": "adamson"}}
     )
 
     assert "Adamson Perturb-seq" in context

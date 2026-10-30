@@ -25,6 +25,9 @@ class RepairingBackend(CodeGenerationBackend):
         previous.output_path.write_text(
             "import argparse\n"
             "parser = argparse.ArgumentParser()\n"
+            "for flag in ('--adata-path', '--val-adata-path', '--output-metrics',\n"
+            "             '--predict-perturbations', '--predictions-out'):\n"
+            "    parser.add_argument(flag)\n"
             "parser.parse_args()\n",
             encoding="utf-8",
         )

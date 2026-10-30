@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 from typing import Optional, Union
 
-
 PathLike = Union[str, os.PathLike]
 PACKAGE_ROOT = Path(__file__).resolve().parent
 SOURCE_ROOT = PACKAGE_ROOT.parent

@@ -1,12 +1,6 @@
 {
-  "task_description": "Your task is to develop a predictive model that accurately estimates gene expression profiles of individual K562 cells following CRISPR interference (CRISPRi), using the dataset from Norman et al. (2019, Science).\n\nTask Definition:\n- Input: Baseline gene expression profile of an unperturbed K562 cell and the identity of the target gene(s) for perturbation\n- Output: Predicted gene expression profile after perturbation\n\nEvaluation Scenarios:\n1. Unseen Perturbations: Predict effects of gene perturbations not present during training\n2. Unseen Cell Contexts: Predict responses in cells with gene expression profiles not observed during training\n\nEvaluation Metrics:\n- Mean Squared Error (MSE): Measures the average squared difference between predicted and observed gene expression.\n- Pearson Correlation Coefficient (PCC): Quantifies linear correlation between predicted and observed profiles.\n- R² (Coefficient of Determination): Represents the proportion of variance in the observed gene expression that can be explained by the predicted values.\n- MSE for Differentially Expressed (DE) Genes (MSE_DE): Same as MSE but computed specifically for genes identified as differentially expressed.\n- PCC for Differentially Expressed (DE) Genes (PCC_DE): Same as PCC but computed specifically for genes identified as differentially expressed.\n- R² for Differentially Expressed (DE) Genes (R2_DE): Same as R² but computed specifically for genes identified as differentially expressed.",
+  "task_description": "Develop a model that predicts the single-cell gene expression profile produced by each perturbation in this dataset.\n\nInput: the expression profile of unperturbed control cells and the identity of the perturbation.\nOutput: the predicted expression profile after perturbation.\n\nEvaluation: hold out whole perturbations, so the model is tested on perturbations it never saw in training. Report MSE, PCC and R2 over all genes and over the top 20 differentially expressed genes (MSE_DE, PCC_DE, R2_DE), plus PCC on the change from control, and compare against the mean-shift baseline.",
   "dataset_path": "data/datasets/",
-  "output_dir": "data/",
-  "llm_config": {
-    "provider": "openai",
-    "model": "gpt-4o-mini",
-    "api_key": "loaded_from_env"
-  },
   "workflow_phases": [
     "task_analysis",
     "method_design",
@@ -14,9 +8,5 @@
   ],
   "code_generation": {
     "backend": "codex"
-  },
-  "qdrant_config": {
-    "host": "localhost",
-    "port": 6333
   }
 }

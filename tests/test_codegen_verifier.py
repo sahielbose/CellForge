@@ -4,20 +4,23 @@ import sys
 import pytest
 
 from cellforge.Code_Generation.verifier import (
+    AUTORUN_FLAGS,
     CodeGenerationVerifier,
     VerificationCommand,
     VerificationContract,
     verify_generated_code,
 )
 
+VALID_SCRIPT = (
+    "import argparse\n"
+    "parser = argparse.ArgumentParser()\n"
+    + "".join(f"parser.add_argument('{flag}')\n" for flag in AUTORUN_FLAGS)
+    + "parser.parse_args()\n"
+)
+
 
 def test_verifier_accepts_valid_entrypoint_and_result(tmp_path):
-    (tmp_path / "result.py").write_text(
-        "import argparse\n"
-        "parser = argparse.ArgumentParser()\n"
-        "parser.parse_args()\n",
-        encoding="utf-8",
-    )
+    (tmp_path / "result.py").write_text(VALID_SCRIPT, encoding="utf-8")
     (tmp_path / "metrics.json").write_text(
         json.dumps({"status": "ok", "mse": 0.1}),
         encoding="utf-8",
@@ -35,6 +38,17 @@ def test_verifier_accepts_valid_entrypoint_and_result(tmp_path):
     assert result.passed
     assert result.failures == []
     assert result.to_dict()["checks"]
+
+
+def test_verifier_rejects_entrypoint_without_autorun_flags(tmp_path):
+    (tmp_path / "result.py").write_text(
+        "import argparse\nargparse.ArgumentParser().parse_args()\n", encoding="utf-8"
+    )
+
+    result = CodeGenerationVerifier().verify(tmp_path, VerificationContract(required_files=("result.py",)))
+
+    assert not result.passed
+    assert any(failure.name == "cli_flags" for failure in result.failures)
 
 
 def test_verifier_returns_structured_repair_feedback(tmp_path):

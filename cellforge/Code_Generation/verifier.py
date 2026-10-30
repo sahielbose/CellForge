@@ -9,14 +9,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Union
 
-
 DEFAULT_MAX_REPAIR_ROUNDS = 5
+# The flags autorun passes to every generated script (see autorun.runner.build_command).
+AUTORUN_FLAGS = ("--adata-path", "--val-adata-path", "--output-metrics", "--predict-perturbations", "--predictions-out")
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,7 @@ class VerificationContract:
     commands: Optional[Sequence[VerificationCommand]] = None
     result_json: Optional[str] = None
     required_result_fields: Sequence[str] = field(default_factory=tuple)
+    required_flags: Sequence[str] = AUTORUN_FLAGS
 
 
 @dataclass(frozen=True)
@@ -191,15 +194,22 @@ class CodeGenerationVerifier:
                 )
             )
 
-            commands = contract.commands
-            if commands is None:
-                commands = (
-                    VerificationCommand(
-                        name="cli_help",
-                        argv=(sys.executable, contract.entrypoint, "--help"),
-                    ),
+            if contract.commands is None:
+                help_check = self._run_command(
+                    workspace_path,
+                    VerificationCommand(name="cli_help", argv=(sys.executable, contract.entrypoint, "--help")),
                 )
-            for command in commands:
+                checks.append(help_check)
+                missing = [flag for flag in contract.required_flags if flag not in help_check.stdout_tail]
+                if help_check.passed and contract.required_flags:
+                    checks.append(
+                        VerificationCheck(
+                            name="cli_flags",
+                            passed=not missing,
+                            message=f"Missing autorun flags: {', '.join(missing)}" if missing else "All autorun flags present",
+                        )
+                    )
+            for command in contract.commands or ():
                 checks.append(self._run_command(workspace_path, command))
 
         if contract.result_json:
@@ -226,11 +236,13 @@ class CodeGenerationVerifier:
         command: VerificationCommand,
     ) -> VerificationCheck:
         argv = [str(value) for value in command.argv]
+        # Generated code is untrusted, so provider credentials never reach it.
         env = {
-            **os.environ,
-            "PYTHONHASHSEED": "0",
-            "PYTHONDONTWRITEBYTECODE": "1",
+            key: value
+            for key, value in os.environ.items()
+            if not re.search(r"(API_KEY|TOKEN|SECRET|PASSWORD)", key, re.IGNORECASE)
         }
+        env.update({"PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1"})
         try:
             completed = subprocess.run(
                 argv,

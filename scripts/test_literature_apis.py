@@ -5,17 +5,17 @@ Credentials are read exclusively from environment variables. The script never
 prints tokens or raw response headers.
 """
 
-from pathlib import Path
 import argparse
 import json
 import sys
 import tempfile
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from cellforge.retrieval import LiteratureRetriever
+from cellforge.retrieval import LiteratureRetriever  # noqa: E402
 
 
 def main() -> int:

@@ -57,6 +57,20 @@ def _record_orchestration_event(result: AgentRunResult, event: str, **details) -
     )
 
 
+def _verify(result: AgentRunResult) -> VerificationResult:
+    _record_orchestration_event(result, "verification_started")
+    verification = verify_generated_code(result.output_path, workspace=result.workspace)
+    report_path = _write_verification_report(result, verification)
+    _record_orchestration_event(
+        result,
+        "verification_completed",
+        passed=verification.passed,
+        report=str(report_path.relative_to(result.workspace)),
+        failed_checks=[check.name for check in verification.failures],
+    )
+    return verification
+
+
 def run_with_verification(
     backend: CodeGenerationBackend,
     request: AgentRunRequest,
@@ -78,19 +92,7 @@ def run_with_verification(
         )
 
     result = backend.run(request)
-    _record_orchestration_event(result, "verification_started")
-    verification = verify_generated_code(
-        result.output_path,
-        workspace=result.workspace,
-    )
-    report_path = _write_verification_report(result, verification)
-    _record_orchestration_event(
-        result,
-        "verification_completed",
-        passed=verification.passed,
-        report=str(report_path.relative_to(result.workspace)),
-        failed_checks=[check.name for check in verification.failures],
-    )
+    verification = _verify(result)
 
     # Repair prompts are for artifacts that the agent successfully delivered
     # but that failed deterministic checks. Authentication, CLI startup,
@@ -112,19 +114,7 @@ def run_with_verification(
             failed_checks=[check.name for check in verification.failures],
         )
         result = backend.continue_run(result, feedback)
-        _record_orchestration_event(result, "verification_started")
-        verification = verify_generated_code(
-            result.output_path,
-            workspace=result.workspace,
-        )
-        report_path = _write_verification_report(result, verification)
-        _record_orchestration_event(
-            result,
-            "verification_completed",
-            passed=verification.passed,
-            report=str(report_path.relative_to(result.workspace)),
-            failed_checks=[check.name for check in verification.failures],
-        )
+        verification = _verify(result)
 
     if result.status == "completed" and not verification.passed:
         result.status = "failed"

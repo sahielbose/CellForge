@@ -3,7 +3,6 @@
 import json
 from typing import Any, Dict
 
-
 SYSTEM_PROMPT = """You are a computational biologist and expert Python coding agent. Implement the approved research plan in the current task workspace.
 
 IMPORTANT REQUIREMENTS:
@@ -30,11 +29,15 @@ DELIVERY:
 - Ensure {entrypoint} exists and is non-empty before finishing.
 - In the final response, summarize the files changed and any checks run; do not paste the source code.
 
-AUTORUN COMPATIBILITY:
-- Provide a CLI that accepts a training AnnData path via --adata-path, --adata_path, --data_path, --data, or a positional data path.
-- If possible, accept a validation AnnData path via --val-adata-path, --val_data, or --val-path.
-- If possible, accept a metrics output path via --output-metrics, --metrics-path, or --output.
-- Write validation metrics as JSON when a metrics path is provided."""
+COMMAND LINE (autorun calls exactly these flags):
+- --adata-path PATH: training AnnData. Control cells are in it; the perturbation column name is in the
+  CELLFORGE_PERTURBATION_KEY environment variable (default "perturbation").
+- --val-adata-path PATH: validation AnnData with perturbations held out from training.
+- --output-metrics PATH: write validation metrics as JSON.
+- --predict-perturbations PATH: a JSON list of held-out perturbation labels. Their expression is not available.
+- --predictions-out PATH: write an .h5ad with one row per requested perturbation, obs[<perturbation key>] set to
+  its label, var_names set to gene names, and X holding the predicted mean log1p(counts per 10k) profile.
+Held-out perturbations are scored by the harness, not by this script, against a mean-shift baseline."""
 
 
 def build_generation_prompt(research_plan: Dict[str, Any], entrypoint: str = "result.py") -> str:

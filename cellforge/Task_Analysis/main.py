@@ -1,207 +1,68 @@
-from typing import Dict, Any
+"""Run Task Analysis: retrieve evidence once, run the three analysts, refine, save."""
 
-def initialize_knowledge_base(
-    task_description: str,
-    dataset_info: Dict[str, Any],
-    retriever=None,
-) -> bool:
-    """
-    Initialize knowledge base with BFS-DFS search results
-    This is called once at the beginning of Task Analysis
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-    Args:
-        task_description: Description of the research task
-        dataset_info: Information about the dataset
+from ..dataset import infer_task_type
+from ..paths import data_path
+from .agents import BaselineAssessor, DatasetAnalyst, ProblemInvestigator, RefinementAgent
+from .report import TaskAnalysisReport
 
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        from .knowledge_base import knowledge_base
-        from ..retrieval import LiteratureRetriever
 
-        print("Initializing knowledge base with BFS-DFS search...")
+def gather_evidence(retriever, task: str, dataset: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Two queries cover the dataset's own literature and the evaluation literature."""
 
-        # Initialize RAG system
-        rag_system = retriever or LiteratureRetriever.from_env()
+    papers = retriever.search_for_task(task, dataset, limit=10)
+    papers += retriever.search_evaluation_frameworks(task)
+    unique = {}
+    for paper in papers:
+        unique.setdefault(paper.get("evidence_id") or paper.get("title"), paper)
+    return list(unique.values())
 
-        # Perform BFS-DFS search once
-        print("Performing BFS-DFS search for papers...")
-        if hasattr(rag_system, "search_for_task"):
-            papers = rag_system.search_for_task(
-                task_description, dataset_info, limit=20
-            )
-        else:
-            papers = rag_system.search(task_description, limit=20)
-
-        # Store papers in knowledge base (both databases)
-        for paper in papers:
-            # Store in CellForge (main database)
-            knowledge_base.store_knowledge(
-                knowledge_type="papers",
-                content=paper,
-                source="bfs_dfs_search",
-                relevance_score=paper.get("score", 0.8),
-                metadata=paper.get("metadata", {}),
-                use_main_db=True  # CellForge
-            )
-
-            # Store in cellforge_tmp (temporary database)
-            knowledge_base.store_knowledge(
-                knowledge_type="papers",
-                content=paper,
-                source="bfs_dfs_search",
-                relevance_score=paper.get("score", 0.8),
-                metadata=paper.get("metadata", {}),
-                use_main_db=False  # cellforge_tmp
-            )
-
-        # Get and store decision support information
-        print("Retrieving decision support information...")
-        decision_support = rag_system.get_decision_support(task_description, dataset_info)
-        if decision_support:
-            # Store in both databases
-            knowledge_base.store_knowledge(
-                knowledge_type="decision_support",
-                content=decision_support,
-                source="rag_system",
-                relevance_score=0.9,
-                metadata={"task": task_description},
-                use_main_db=True
-            )
-            knowledge_base.store_knowledge(
-                knowledge_type="decision_support",
-                content=decision_support,
-                source="rag_system",
-                relevance_score=0.9,
-                metadata={"task": task_description},
-                use_main_db=False
-            )
-
-        # Get and store experimental designs
-        print("Retrieving experimental designs...")
-        experimental_designs = rag_system.search_experimental_designs(task_description)
-        for design in experimental_designs:
-            # Store in both databases
-            knowledge_base.store_knowledge(
-                knowledge_type="experimental_designs",
-                content=design,
-                source="rag_system",
-                relevance_score=0.85,
-                metadata={"task": task_description},
-                use_main_db=True
-            )
-            knowledge_base.store_knowledge(
-                knowledge_type="experimental_designs",
-                content=design,
-                source="rag_system",
-                relevance_score=0.85,
-                metadata={"task": task_description},
-                use_main_db=False
-            )
-
-        # Get and store implementation guides
-        print("Retrieving implementation guides...")
-        implementation_guides = rag_system.search_implementation_guides(task_description)
-        for guide in implementation_guides:
-            # Store in both databases
-            knowledge_base.store_knowledge(
-                knowledge_type="implementation_guides",
-                content=guide,
-                source="rag_system",
-                relevance_score=0.85,
-                metadata={"task": task_description},
-                use_main_db=True
-            )
-            knowledge_base.store_knowledge(
-                knowledge_type="implementation_guides",
-                content=guide,
-                source="rag_system",
-                relevance_score=0.85,
-                metadata={"task": task_description},
-                use_main_db=False
-            )
-
-        # Get and store evaluation frameworks
-        print("Retrieving evaluation frameworks...")
-        evaluation_frameworks = rag_system.search_evaluation_frameworks(task_description)
-        for framework in evaluation_frameworks:
-            # Store in both databases
-            knowledge_base.store_knowledge(
-                knowledge_type="evaluation_frameworks",
-                content=framework,
-                source="rag_system",
-                relevance_score=0.85,
-                metadata={"task": task_description},
-                use_main_db=True
-            )
-            knowledge_base.store_knowledge(
-                knowledge_type="evaluation_frameworks",
-                content=framework,
-                source="rag_system",
-                relevance_score=0.85,
-                metadata={"task": task_description},
-                use_main_db=False
-            )
-
-        # Print summary
-        summary = knowledge_base.get_knowledge_summary()
-        print("✅ Knowledge base initialized successfully!")
-        print(f"   Papers: {summary.get('papers', {}).get('count', 0)}")
-        print(f"   Decision Support: {summary.get('decision_support', {}).get('count', 0)}")
-        print(f"   Experimental Designs: {summary.get('experimental_designs', {}).get('count', 0)}")
-        print(f"   Implementation Guides: {summary.get('implementation_guides', {}).get('count', 0)}")
-        print(f"   Evaluation Frameworks: {summary.get('evaluation_frameworks', {}).get('count', 0)}")
-
-        return True
-
-    except Exception as e:
-        print(f"❌ Failed to initialize knowledge base: {e}")
-        return False
 
 def run_task_analysis(
     task_description: str,
-    dataset_info: dict = None,
+    dataset_info: Optional[Dict[str, Any]] = None,
     retriever=None,
-):
-    """
-    Run complete Task Analysis workflow with knowledge base optimization
+    llm=None,
+    output_dir: Optional[str] = None,
+) -> TaskAnalysisReport:
+    from ..retrieval import LiteratureRetriever
 
-    Args:
-        task_description: Description of the research task
-        dataset_info: Information about the dataset
+    dataset_info = dataset_info or {}
+    retriever = retriever or LiteratureRetriever.from_env()
+    evidence = gather_evidence(retriever, task_description, dataset_info)
+    print(f"Retrieved {len(evidence)} papers")
 
-    Returns:
-        TaskAnalysisReport with comprehensive analysis
-    """
-    try:
-        print("Starting Task Analysis with optimized knowledge base...")
+    analyses = []
+    for agent in (DatasetAnalyst(llm), ProblemInvestigator(llm), BaselineAssessor(llm)):
+        print(f"Running {agent.name}")
+        analyses.append(agent.analyze(task_description, dataset_info, evidence))
 
-        from ..retrieval import LiteratureRetriever
-        retriever = retriever or LiteratureRetriever.from_env()
+    rounds = int(os.getenv("TASK_ANALYSIS_MAX_REFINEMENT_ROUNDS", "2"))
+    report = RefinementAgent(llm, max_rounds=rounds).refine(task_description, dataset_info, evidence, analyses)
+    save_report(report, task_description, dataset_info, retriever, output_dir)
+    return report
 
-        # Initialize the shared knowledge base once. The same retriever is passed
-        # to every Task Analysis agent so online results and local caches are reused.
-        if not initialize_knowledge_base(
-            task_description, dataset_info or {}, retriever=retriever
-        ):
-            print("Knowledge base initialization failed, continuing with fallback...")
 
-        # Initialize collaboration system (now uses knowledge base internally)
-        from .collaboration import CollaborationSystem
-
-        collaboration = CollaborationSystem(retriever=retriever)
-
-        # Run analysis (agents will use knowledge base instead of repeated searches)
-        print("Running collaborative analysis using knowledge base...")
-        report = collaboration.run_analysis(
-            task_description=task_description,
-            dataset_info=dataset_info or {}
-        )
-
-        print("✅ Task Analysis completed successfully!")
-        return report
-
-    except Exception as e:
-        print(f"❌ Task Analysis failed: {e}")
-        return None
+def save_report(report, task_description, dataset_info, retriever, output_dir=None) -> Path:
+    out = Path(output_dir or os.getenv("TASK_ANALYSIS_OUTPUT_DIR") or data_path("analyses", "unknown_dataset"))
+    out.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    trace = getattr(retriever, "last_trace", None)
+    payload = {
+        "timestamp": stamp,
+        "task_description": task_description,
+        "dataset_info": dataset_info,
+        "task_type": infer_task_type(task_description, dataset_info),
+        "analysis_results": report.to_dict(),
+        "metadata": {"version": "2.0", "retrieval": trace.to_dict() if trace else None},
+    }
+    path = out / f"task_analysis_{stamp}.json"
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    path.with_suffix(".md").write_text(report.to_markdown(), encoding="utf-8")
+    print(f"Task analysis saved to {path}")
+    return path

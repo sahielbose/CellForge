@@ -1,5 +1,6 @@
-"""Autorun helpers for task-wise split, execute, and SLURM submission."""
+"""Autorun: perturbation-level splits, execution (local or Slurm), and held-out scoring."""
 
-from .runner import run_autorun
+from .runner import prepare_split, run_autorun
+from .scoring import score_predictions, score_run
 
-__all__ = ["run_autorun"]
+__all__ = ["prepare_split", "run_autorun", "score_predictions", "score_run"]

@@ -2,62 +2,31 @@ from pathlib import Path
 
 from setuptools import find_packages, setup
 
-
 ROOT = Path(__file__).parent
-
-
-def read_requirements():
-    requirements = []
-    for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("-"):
-            continue
-        if line.startswith("pip"):
-            continue
-        requirements.append(line)
-    return requirements
-
+REQUIREMENTS = [
+    line.strip()
+    for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    if line.strip() and not line.startswith("#")
+]
 
 setup(
     name="cellforge",
-    version="0.1.0",
-    packages=find_packages(include=["cellforge", "cellforge.*"]),
-    include_package_data=True,
-    package_data={
-        "cellforge.autorun": ["*.md", "*.mjs"],
-        "cellforge.Code_Generation.legacy": ["*.md"],
-        "cellforge.legacy.rag_v1": ["*.md"],
-    },
-    py_modules=["main"],
-    entry_points={"console_scripts": ["cellforge=main:cli_entrypoint"]},
-    install_requires=read_requirements(),
-    extras_require={
-        "dev": [
-            "pytest>=7.0.0",
-            "pytest-asyncio>=0.21.0",
-            "black>=23.1.0",
-            "isort>=5.12.0",
-            "mypy>=1.3.0",
-        ],
-    },
-    python_requires=">=3.9,<3.13",
-    author="CellForge authors",
-    description="Open-ended autonomous design of computational methods for single-cell omics via multi-agent collaboration",
+    version="0.2.0",
+    description="Agentic design of virtual cell models for single-cell perturbation data",
     long_description=(ROOT / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/gersteinlab/CellForge",
+    license="MIT",
+    packages=find_packages(include=["cellforge", "cellforge.*"]),
+    py_modules=["main"],
+    entry_points={"console_scripts": ["cellforge=main:cli_entrypoint"]},
+    install_requires=REQUIREMENTS,
+    extras_require={"pdf": ["pymupdf>=1.22"], "dev": ["pytest>=7.0", "ruff>=0.4"]},
+    python_requires=">=3.9,<3.13",
     classifiers=[
-        "Development Status :: 3 - Alpha",
         "Intended Audience :: Science/Research",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
-        "Programming Language :: Python :: 3.12",
-        "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "Topic :: Scientific/Engineering :: Bio-Informatics",
     ],
 )

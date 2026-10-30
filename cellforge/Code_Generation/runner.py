@@ -15,13 +15,14 @@ from .codex_events import AgentEventLog, CodexJsonlRecorder, safe_text
 from .contracts import AgentRunRequest, AgentRunResult
 from .prompts import build_generation_prompt, build_repair_prompt
 
-
 DEFAULT_ACCEPTANCE_CONTRACT = {
     "entrypoint": "result.py",
     "required_cli": {
-        "training_data": ["--adata-path", "--adata_path", "--data_path", "--data", "positional"],
-        "validation_data": ["--val-adata-path", "--val_data", "--val-path"],
-        "metrics_output": ["--output-metrics", "--metrics-path", "--output"],
+        "training_data": ["--adata-path"],
+        "validation_data": ["--val-adata-path"],
+        "metrics_output": ["--output-metrics"],
+        "prediction_targets": ["--predict-perturbations"],
+        "predictions_output": ["--predictions-out"],
     },
     "constraints": {
         "paths_must_not_be_hardcoded": True,

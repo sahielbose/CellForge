@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 from cellforge.retrieval.models import PaperRecord
 from cellforge.retrieval.providers import (

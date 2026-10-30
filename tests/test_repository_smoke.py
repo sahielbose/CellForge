@@ -4,7 +4,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -28,8 +27,8 @@ def test_expected_entrypoints_exist():
         "cellforge/Code_Generation/__init__.py",
         "cellforge/Code_Generation/base.py",
         "cellforge/Code_Generation/codex_backend.py",
-        "cellforge/Code_Generation/legacy/openhands_backend.py",
-        "cellforge/legacy/rag_v1/rag.py",
+        "cellforge/dataset.py",
+        "cellforge/autorun/scoring.py",
     ]:
         assert (ROOT / relative_path).exists()
 
@@ -57,15 +56,13 @@ def test_cli_help_is_clean_without_env_file(tmp_path):
     assert process.returncode == 0
     assert "usage:" in process.stdout
     assert ".env file not found" not in process.stdout
-    assert "--codex-optimize-rounds" not in process.stdout
+    assert "--predict" not in process.stdout
     assert process.stderr == ""
 
 
-def test_legacy_rag_is_isolated_from_active_task_analysis():
-    active = ROOT / "cellforge" / "Task_Analysis"
-    for filename in ("rag.py", "search.py", "indexer.py", "dataparser.py", "utils.py"):
-        assert not (active / filename).exists()
-        assert (ROOT / "cellforge" / "legacy" / "rag_v1" / filename).exists()
+def test_legacy_code_is_gone():
+    for relative_path in ("cellforge/legacy", "cellforge/Code_Generation/legacy", "package.json"):
+        assert not (ROOT / relative_path).exists()
 
 
 def test_workspace_paths_follow_environment(tmp_path, monkeypatch):
@@ -113,39 +110,6 @@ def test_init_creates_only_canonical_workspace_directories(tmp_path):
         assert (tmp_path / "data" / name).is_dir()
     assert not (tmp_path / "results").exists()
     assert not (tmp_path / "data" / "results").exists()
-
-
-def test_collect_score_paths_accepts_numeric_scores(tmp_path):
-    state_path = tmp_path / "dataset" / "worker" / "run_state.json"
-    state_path.parent.mkdir(parents=True)
-    state_path.write_text(
-        json.dumps(
-            {
-                "dataset_name": "adamson",
-                "history": [{"iter": 1, "metrics": {"val_pearson": 0.5}}],
-            }
-        ),
-        encoding="utf-8",
-    )
-    output_path = tmp_path / "reports" / "scores.csv"
-
-    process = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "scripts" / "collect_score_paths.py"),
-            "--root",
-            str(tmp_path),
-            "--out",
-            str(output_path),
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert process.returncode == 0
-    assert "0.5" in output_path.read_text(encoding="utf-8")
 
 
 def test_codegen_backends_are_registered():
@@ -212,17 +176,3 @@ def test_codex_api_fallback_requires_explicit_auth_mode(monkeypatch):
 
     assert environment["OPENAI_API_KEY"] == "codex-fixture"
     assert environment["OPENAI_BASE_URL"] == "https://api.openai.example/v1"
-
-
-def test_legacy_openhands_fails_during_backend_selection():
-    import pytest
-
-    from cellforge.Code_Generation import create_backend
-    from cellforge.Code_Generation.legacy import LegacyBackendUnavailableError
-    from cellforge.Code_Generation.legacy.openhands_backend import OpenHandsLegacyCodeGenerator
-
-    for name in ("openhands", "openhands-legacy", "legacy-openhands"):
-        with pytest.raises(LegacyBackendUnavailableError, match="no longer supported"):
-            create_backend(name)
-    with pytest.raises(LegacyBackendUnavailableError, match="Use 'codex'"):
-        OpenHandsLegacyCodeGenerator()

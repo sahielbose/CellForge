@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any, Dict, List, Optional
-import re
 
 
 def _clean_identifier(value: Optional[str]) -> Optional[str]:
