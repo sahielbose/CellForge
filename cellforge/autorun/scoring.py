@@ -149,6 +149,7 @@ def score_predictions(
     pred_labels = pred.obs[key].astype(str).to_numpy() if pred is not None else None
     pred_matrix = _dense(pred[:, genes].X) if pred is not None else None
     rows = {"model": [], "no_change": [], "mean_shift": []}
+    per_perturbation: Dict[str, Dict[str, float]] = {}
     missing = []
     for label, stats in truth.items():
         if label == CONTROL:
@@ -161,6 +162,7 @@ def score_predictions(
         observed = stats[0]
         if pred is not None:
             rows["model"].append(profile_metrics(pred_matrix[hits[0]], observed, control, de))
+            per_perturbation[label] = rows["model"][-1]
         rows["no_change"].append(profile_metrics(control, observed, control, de))
         rows["mean_shift"].append(profile_metrics(mean_shift, observed, control, de))
 
@@ -176,6 +178,7 @@ def score_predictions(
         "n_genes": len(genes),
         "n_de_genes": k,
         "metrics": summary,
+        "per_perturbation": per_perturbation,  # the model's metrics for each scored perturbation
         # a tie within float32 rounding is not a win
         "beats_mean_shift_on_PCC_delta": bool(model and model["PCC_delta"] > baseline["PCC_delta"] + 1e-6),
     }

@@ -1,6 +1,7 @@
 """Tests for the dataset reader, perturbation split, scorer, discussion and refinement."""
 
 import json
+import re
 from pathlib import Path
 
 import anndata as ad
@@ -164,7 +165,7 @@ class ScriptedLLM:
     def chat_completion(self, messages, temperature=None, max_tokens=None, model=None):
         self.calls += 1
         prompt = messages[-1]["content"]
-        names = [name for name in CORE if f"### {name}" in prompt]
+        names = re.findall(r"### (Proposal [A-Z])", prompt)
         if prompt.startswith("Write the research plan"):
             return json.dumps(self.plan) if self.plan else "not json"
         if "area chair" in prompt or "Review these proposals" in prompt:
@@ -200,6 +201,28 @@ def test_discussion_stops_after_one_round_when_reviews_are_high():
 
     assert state.consensus_reached
     assert len(state.history) == 1
+
+
+def test_first_drafts_are_independent_and_reviews_are_anonymous():
+    class Recorder(ScriptedLLM):
+        prompts = []
+
+        def chat_completion(self, messages, **kwargs):
+            self.prompts.append(messages[-1]["content"])
+            return super().chat_completion(messages, **kwargs)
+
+    llm = Recorder(score=0.6)
+    discussion = GraphDiscussion(llm, team(), "task", max_rounds=2, min_rounds=2, seed=1)
+    discussion.run_round(0)
+    first = list(llm.prompts)
+    discussion.run_round(1)
+
+    drafts = [p for p in first if p.startswith("You are the") and "Round 1." in p]
+    assert len(drafts) == len(CORE) and not any("OTHER PROPOSALS" in p for p in drafts)
+    reviews = [p for p in llm.prompts if "area chair" in p or "Review these proposals" in p]
+    assert reviews and not any(f"### {name}" in p for p in reviews for name in CORE)
+    orders = [tuple(r["critic_labels"].values()) for r in discussion.state.history]
+    assert orders[0] != orders[1]  # a fresh order every round
 
 
 def test_scores_are_clamped_to_the_paper_range():

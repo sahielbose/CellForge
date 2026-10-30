@@ -1,8 +1,12 @@
 """Graph-structured expert discussion with critic and peer review.
 
 Each round every expert drafts or revises a proposal, a central critic scores
-every proposal, and each expert scores the others. Coordination scores follow
-the paper:
+every proposal, and each expert scores the others. Experts draft from the
+previous round's proposals only, so first drafts are independent and no expert
+sees a draft written earlier in the same round. Reviewers see proposals under
+neutral labels in a fresh random order, so neither the author's role nor the
+position in the list can earn a higher score. Coordination scores follow the
+paper:
 
     c_t = 0.3 * c_{t-1} + 0.4 * critic_t + 0.3 * mean(peer_t)
 
@@ -13,6 +17,7 @@ the research plan, and lower-ranked proposals are dropped.
 """
 
 import json
+import random
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -65,6 +70,7 @@ class GraphDiscussion:
         max_spread: float = 0.03,
         max_tokens: int = 900,
         reviews: tuple = ("critic", "peer"),
+        seed: int = 0,
     ):
         if not set(reviews) & {"critic", "peer"}:
             raise ValueError("The discussion needs critic or peer reviews to score proposals")
@@ -79,6 +85,7 @@ class GraphDiscussion:
         self.max_spread = max_spread
         self.max_tokens = max_tokens
         self.state = DiscussionState(scores={e.name: 0.5 for e in experts})
+        self.rng = random.Random(seed)
 
     def _ask(self, prompt: str, max_tokens: Optional[int] = None) -> str:
         return self.llm.chat_completion(
@@ -91,59 +98,68 @@ class GraphDiscussion:
         except ValueError:
             return {}
 
-    def _proposal_prompt(self, expert: Expert, round_index: int) -> str:
-        previous = self.state.proposals.get(expert.name)
+    def _proposal_prompt(self, expert: Expert, round_index: int, previous_round: Dict[str, str]) -> str:
+        previous = previous_round.get(expert.name)
         notes = "\n".join(f"- {line}" for line in self.state.feedback.get(expert.name, [])) or "- none yet"
-        others = "\n\n".join(
-            f"{name}:\n{text[:1200]}" for name, text in self.state.proposals.items() if name != expert.name
-        )
+        others = "\n\n".join(f"{name}:\n{text[:1200]}" for name, text in previous_round.items() if name != expert.name)
         return (
             f"You are the {expert.name}, focused on {expert.focus} "
             f"(skills: {', '.join(expert.skills)}).\n\nTASK\n{self.task_summary}\n\n"
             f"LITERATURE (cite evidence IDs in brackets)\n{self.evidence or 'none retrieved'}\n\n"
             + (f"YOUR PREVIOUS PROPOSAL\n{previous}\n\nREVIEWS OF IT\n{notes}\n\n" if previous else "")
-            + (f"OTHER PROPOSALS\n{others}\n\n" if others else "")
+            + (f"OTHER PROPOSALS FROM THE LAST ROUND\n{others}\n\n" if others else "")
             + f"Round {round_index + 1}. Propose the model design for this task from your angle: concrete "
             "architecture components and their configuration, how it handles unseen perturbations, the loss, "
             "and how it will be shown to beat the mean-shift baseline. Address every review point. "
             "Be specific and keep it under 400 words."
         )
 
-    def _critic_prompt(self) -> str:
-        proposals = "\n\n".join(f"### {name}\n{text}" for name, text in self.state.proposals.items())
+    def _labels(self, names: List[str]) -> Dict[str, str]:
+        """Neutral labels in a fresh random order, mapped back to the experts who wrote the proposals."""
+
+        return {f"Proposal {chr(65 + i)}": name for i, name in enumerate(self.rng.sample(names, len(names)))}
+
+    def _listing(self, labels: Dict[str, str]) -> str:
+        return "\n\n".join(f"### {label}\n{self.state.proposals[name]}" for label, name in labels.items())
+
+    def _critic_prompt(self, labels: Dict[str, str]) -> str:
         return (
-            f"You are the area chair reviewing proposals for this task:\n{self.task_summary}\n\n{proposals}\n\n"
+            f"You are the area chair reviewing proposals for this task:\n{self.task_summary}\n\n"
+            f"{self._listing(labels)}\n\n"
             "Score each proposal from 0 to 1 for scientific soundness, feasibility on one GPU, and whether its "
-            'evaluation is leak-free. Return JSON: {"scores": {"<expert name>": 0.0}, '
-            '"comments": {"<expert name>": "<the most important fix>"}}'
+            'evaluation is leak-free. Return JSON: {"scores": {"<proposal label>": 0.0}, '
+            '"comments": {"<proposal label>": "<the most important fix>"}}'
         )
 
-    def _peer_prompt(self, reviewer: Expert) -> str:
-        proposals = "\n\n".join(
-            f"### {name}\n{text}" for name, text in self.state.proposals.items() if name != reviewer.name
-        )
+    def _peer_prompt(self, reviewer: Expert, labels: Dict[str, str]) -> str:
         return (
             f"You are the {reviewer.name}. Review these proposals from the standpoint of {reviewer.focus}.\n\n"
-            f"{proposals}\n\nReturn JSON: "
-            '{"scores": {"<expert name>": 0.0}, "comments": {"<expert name>": "<one concrete issue>"}}'
+            f"{self._listing(labels)}\n\nReturn JSON: "
+            '{"scores": {"<proposal label>": 0.0}, "comments": {"<proposal label>": "<one concrete issue>"}}'
         )
 
     def run_round(self, round_index: int) -> Dict[str, Any]:
+        previous_round = dict(self.state.proposals)
         for expert in self.experts:
-            self.state.proposals[expert.name] = self._ask(self._proposal_prompt(expert, round_index))
+            self.state.proposals[expert.name] = self._ask(self._proposal_prompt(expert, round_index, previous_round))
 
-        critic = self._ask_json(self._critic_prompt()) if "critic" in self.reviews else {}
-        critic_scores = {name: clamp(critic.get("scores", {}).get(name)) for name in self.state.proposals}
-        feedback = {name: [f"Critic: {c}"] for name, c in critic.get("comments", {}).items() if name in critic_scores}
-        peer_scores: Dict[str, List[float]] = {name: [] for name in self.state.proposals}
+        names = list(self.state.proposals)
+        critic_labels = self._labels(names)
+        critic = self._ask_json(self._critic_prompt(critic_labels)) if "critic" in self.reviews else {}
+        scored = critic.get("scores", {}) if isinstance(critic.get("scores"), dict) else {}
+        critic_scores = {name: clamp(scored.get(label)) for label, name in critic_labels.items()}
+        feedback = {critic_labels[label]: [f"Critic: {c}"] for label, c in (critic.get("comments") or {}).items()
+                    if label in critic_labels}
+        peer_scores: Dict[str, List[float]] = {name: [] for name in names}
         for reviewer in self.experts if "peer" in self.reviews else ():
-            review = self._ask_json(self._peer_prompt(reviewer))
-            for name, score in review.get("scores", {}).items():
-                if name in peer_scores and name != reviewer.name:
-                    peer_scores[name].append(clamp(score))
-            for name, comment in review.get("comments", {}).items():
-                if name in peer_scores and name != reviewer.name:
-                    feedback.setdefault(name, []).append(f"{reviewer.name}: {comment}")
+            labels = self._labels([name for name in names if name != reviewer.name])
+            review = self._ask_json(self._peer_prompt(reviewer, labels))
+            for label, score in (review.get("scores") or {}).items():
+                if label in labels:
+                    peer_scores[labels[label]].append(clamp(score))
+            for label, comment in (review.get("comments") or {}).items():
+                if label in labels:
+                    feedback.setdefault(labels[label], []).append(f"{reviewer.name}: {comment}")
 
         for name in self.state.scores:
             peers = peer_scores.get(name) or [0.5]
@@ -157,6 +173,7 @@ class GraphDiscussion:
             "round": round_index + 1,
             "proposals": dict(self.state.proposals),
             "critic": critic,
+            "critic_labels": critic_labels,
             "peer_scores": peer_scores,
             "coordination_scores": dict(self.state.scores),
         }

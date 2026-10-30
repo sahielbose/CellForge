@@ -168,3 +168,50 @@ def test_oracle_script_is_better_than_the_mean_shift(screen, tmp_path):
                               "perturbation")
     assert score["metrics"]["model"]["PCC_delta"] > score["metrics"]["mean_shift"]["PCC_delta"] + 0.1
     assert np.isfinite(score["metrics"]["model"]["MSE_DE"])
+
+
+def fake_score(values):
+    """A selection score whose per-perturbation PCC_delta values are given."""
+
+    metrics = {m: 0.0 for m in ("PCC_delta", "MSE_DE", "PCC_DE", "Recall", "AUROC", "MSE")}
+    model = dict(metrics, PCC_delta=float(np.mean(values)))
+    return {"n_scored": len(values), "metrics": {"model": model, "mean_shift": metrics, "no_change": metrics},
+            "per_perturbation": {f"P{i}": {"PCC_delta": v} for i, v in enumerate(values)}}
+
+
+def test_paired_gain_rejects_a_noisy_improvement():
+    from cellforge.autorun.refine import paired_gain
+
+    best = fake_score([0.30, 0.30, 0.30, 0.30])
+    steady, gain_se = paired_gain(fake_score([0.33, 0.32, 0.34, 0.33]), best, "PCC_delta")
+    noisy, noisy_se = paired_gain(fake_score([0.95, -0.15, 0.75, -0.05]), best, "PCC_delta")
+
+    assert steady == pytest.approx(0.03) and steady > gain_se
+    assert noisy > steady and noisy < noisy_se  # a larger mean gain that one standard error does not support
+
+
+def test_refine_debugs_failed_candidates_and_tells_branches_what_was_tried(tmp_path):
+    from types import SimpleNamespace
+
+    from cellforge.autorun.refine import refine
+
+    scores = {"start": [0.3, 0.3, 0.3], "broken": None, "fixed": [0.5, 0.45, 0.55], "other": [0.31, 0.3, 0.3]}
+    reports = []
+
+    def run(script, tag):
+        return SimpleNamespace(logs_dir=str(tmp_path), error="exit code 1" if script == "broken" else "", script=script)
+
+    def score(job):
+        values = scores[job.script]
+        return fake_score(values) if values else None
+
+    def improve(script, report, tag):
+        reports.append((tag, report))
+        return {"round01_branch0": "broken", "round01_branch0_debug": "fixed", "round01_branch1": "other"}[tag], tag
+
+    best, job, record = refine("start", run=run, score=score, improve=improve, rounds=1, branches=2)
+
+    assert best == "fixed" and record["evaluations"] == 4  # start, broken, its debug fix, the second branch
+    assert [a["outcome"] for a in record["attempts"]] == ["kept", "discarded"]
+    assert "exit code 1" in dict(reports)["round01_branch0_debug"]
+    assert "CHANGES ALREADY TRIED THIS ROUND" in dict(reports)["round01_branch1"]
