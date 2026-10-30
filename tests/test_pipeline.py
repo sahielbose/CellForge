@@ -322,3 +322,51 @@ def test_task_analysis_report_feeds_method_design(screen, tmp_path, monkeypatch)
     assert analysis["analysis"]["final_recommendations"]["model_architecture"] == {"family": "delta MLP"}
     assert result["json"]["model_architecture"] == {"family": "delta MLP"}
     assert report.dataset_analysis.metadata["evidence_ids"] == ["cf:doi:10.1/x"]
+
+
+MEAN_SHIFT_SCRIPT = '''
+import argparse, json, os
+import anndata as ad
+import numpy as np
+
+parser = argparse.ArgumentParser()
+for flag in ("--adata-path", "--val-adata-path", "--output-metrics", "--predict-perturbations", "--predictions-out"):
+    parser.add_argument(flag)
+args = parser.parse_args()
+key = os.environ["CELLFORGE_PERTURBATION_KEY"]
+train = ad.read_h5ad(args.adata_path)
+x = np.log1p(train.X / train.X.sum(axis=1, keepdims=True) * 1e4)
+labels = train.obs[key].astype(str).to_numpy()
+control = x[labels == "non-targeting"].mean(axis=0)
+shift = np.mean([x[labels == p].mean(axis=0) - control for p in set(labels) - {"non-targeting"}], axis=0)
+names = json.load(open(args.predict_perturbations))
+out = ad.AnnData(np.tile(control + shift, (len(names), 1)).astype(np.float32))
+out.var_names = train.var_names
+out.obs_names = names
+out.obs[key] = names
+out.write_h5ad(args.predictions_out)
+json.dump({"status": "ok"}, open(args.output_metrics, "w"))
+'''
+
+
+def test_autorun_runs_and_scores_a_generated_script(screen, tmp_path, monkeypatch):
+    import cellforge.Code_Generation as codegen
+    from cellforge.autorun import run_autorun
+
+    script = tmp_path / "result.py"
+    script.write_text(MEAN_SHIFT_SCRIPT, encoding="utf-8")
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    (plans / "research_plan_1.json").write_text(json.dumps({"task_wise_plan": [{"task_id": "T01"}]}))
+    monkeypatch.setenv("CELLFORGE_WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(codegen, "generate_code_from_plan_task", lambda plan, task_id, output_dir, backend: str(script))
+
+    summary = run_autorun(dataset_path=str(screen), plans_dir=str(plans), fold=2)
+
+    job = summary["jobs"][0]
+    assert job["status"] == "completed", job["error"]
+    score = job["score"]
+    assert score["n_scored"] == score["n_test_perturbations"] == 2
+    # the script predicts the mean shift, so it scores exactly as the mean-shift baseline
+    assert score["metrics"]["model"]["PCC_delta"] == pytest.approx(score["metrics"]["mean_shift"]["PCC_delta"], abs=1e-4)
+    assert summary["split"]["fold"] == 2

@@ -14,6 +14,7 @@ import random
 import re
 import shlex
 import subprocess
+import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -92,7 +93,7 @@ def prepare_split(dataset_file: Path, split_root: Path, n_folds=5, fold=0, val_r
     return manifest
 
 
-def build_command(code_file: Path, split: Dict[str, Any], logs_dir: Path) -> str:
+def build_command(code_file: Path, split: Dict[str, Any], logs_dir: Path, python: str = "python") -> str:
     """The CLI every generated script implements (see the acceptance contract)."""
 
     args = {
@@ -102,7 +103,7 @@ def build_command(code_file: Path, split: Dict[str, Any], logs_dir: Path) -> str
         "--predict-perturbations": split["test_perturbations"],
         "--predictions-out": logs_dir / "predictions.h5ad",
     }
-    return " ".join(["python", shlex.quote(str(code_file))] + [f"{k} {shlex.quote(str(v))}" for k, v in args.items()])
+    return " ".join([shlex.quote(python), shlex.quote(str(code_file))] + [f"{k} {shlex.quote(str(v))}" for k, v in args.items()])
 
 
 def render_sbatch(job_name: str, command: str, logs_dir: Path, slurm: Dict[str, Any], env: Dict[str, str]) -> str:
@@ -165,7 +166,8 @@ def run_autorun(
         if not code_file:
             jobs.append(JobRecord(task_id, "", "codegen_failed", "", str(logs_dir), error="code generation failed"))
             continue
-        command = build_command(Path(code_file), split, logs_dir)
+        # local runs use this interpreter; Slurm jobs use the activated environment's python
+        command = build_command(Path(code_file), split, logs_dir, sys.executable if executor == "local" else "python")
         env = {"CELLFORGE_PERTURBATION_KEY": split["perturbation_key"]}
         if executor == "local":
             job = _run_local(task_id, code_file, command, logs_dir, env, timeout_hours)
