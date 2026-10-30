@@ -15,7 +15,7 @@
 
 <p>
 <a href="https://arxiv.org/abs/2508.02276">Paper</a> &nbsp;·&nbsp;
-<a href="docs/RESULTS.md">Results in the paper</a> &nbsp;·&nbsp;
+<a href="docs/RESULTS.md">Results</a> &nbsp;·&nbsp;
 <a href="docs/DATASETS.md">Datasets</a> &nbsp;·&nbsp;
 <a href="docs/EXPERIMENTS.md">GPU benchmark plan</a>
 </p>
@@ -39,7 +39,7 @@ The code is in `cellforge/Task_Analysis`. The dataset file is opened in backed m
 
 ### Ideation
 
-The code is in `cellforge/Method_Design`. A team of four experts (data engineering, single-cell biology, deep learning, training) is extended with specialists an LLM picks for the task. In each round every expert drafts or revises a proposal, a critic scores all proposals in one call, and each expert reviews the others. Each expert's coordination score follows the update in the paper,
+The code is in `cellforge/Method_Design`. A team of four experts (data engineering, single-cell biology, deep learning, training) is extended with specialists an LLM picks for the task. In each round every expert drafts or revises a proposal, a critic scores all proposals in one call, and each expert reviews the others. First drafts are written independently, and later revisions see only the previous round's proposals. Reviewers see the proposals as Proposal A, B and so on, relabeled in a fresh random order every round, because LLM judges are known to favor answers by their position and to favor their own (Zheng et al., [arXiv:2306.05685](https://arxiv.org/abs/2306.05685)). Each expert's coordination score follows the update in the paper,
 
 ```math
 c_t = 0.3\,c_{t-1} + 0.4\,\text{critic}_t + 0.3\,\overline{\text{peer}}_t
@@ -58,6 +58,16 @@ Because the score moves 70% of the way toward the current reviews in each round,
 
 The code is in `cellforge/Code_Generation` and `cellforge/autorun`. The Codex CLI writes a training script for each task block of the plan. A verifier compiles it and checks that its `--help` lists the five flags the runner passes, and failures go back to Codex as a structured report for a bounded number of repairs. A script is written once per plan and reused for all five folds, so every fold trains the same design. The runner trains it on one fold at a time, locally or through Slurm, and scores its predictions.
 
+With `CODEGEN_SMOKE_TEST=true` the verifier also runs each script end to end, before any GPU job, on a small stand-in dataset. The stand-in uses resampled control cells under real gene names and perturbation labels, and each stand-in perturbation raises two genes threefold. It holds no real perturbation effect, so nothing from a held-out fold reaches the script. A script that crashes on real shapes or writes predictions in the wrong format goes back to Codex like any other failure, which matters because the paper attributes 64% of its failed runs to execution errors and invalid types that a `--help` check cannot catch.
+
+### Refinement loop
+
+`--refine-rounds N` turns execution into a closed loop, condition C1 of the [benchmark plan](docs/EXPERIMENTS.md), and the default of zero rounds leaves the pipeline as described above. The split sets aside a selection set of perturbations (`--select-ratio`, 10% by default) that the script has to predict but never receives, with their names mixed among the test names. Each round, Codex gets the current best script, its selection scores next to the linear, mean-shift and no-change predictors, the end of its training log and a journal of earlier attempts, and makes one change. The change is kept only if its gain, paired by perturbation, exceeds both 0.001 and one standard error, since agents that search on a held-out score tend to overfit it (AIRA-dojo, [arXiv:2507.02554](https://arxiv.org/abs/2507.02554)). A candidate that fails to train gets one debug turn with its error log. `--refine-branches k` tries k different changes per round, each shown the ones already tried, and keeps the best, and `--flush-at 0.33,0.66` clears the journal at those fractions of the budget, which is the forgetting step of Fork-and-Flush. The test fold is scored once, for the final script.
+
+```bash
+cellforge --phase autorun --dataset-path $DATA --fold 0 --refine-rounds 8 --refine-branches 2 --flush-at 0.5
+```
+
 ## Evaluation
 
 <picture>
@@ -67,22 +77,24 @@ The code is in `cellforge/Code_Generation` and `cellforge/autorun`. The Codex CL
 
 The split and the metrics follow the paper. Perturbation identities are shuffled once with a fixed seed and divided into five folds, and each run holds one fold out for testing, so a model is always scored on perturbations it did not train on. Control cells stay in training because every prediction is made relative to them. The generated script receives the training and validation files and the names of the test perturbations, and writes one predicted mean profile (log1p of counts per 10k) per test perturbation to `predictions.h5ad`, while the test expression itself stays with the harness.
 
-For each held-out perturbation, `cellforge/autorun/scoring.py` compares mean profiles and reports MSE, PCC and R² over all genes, PCC on the change from control, and the same three metrics over the observed differentially expressed genes. That set is the top min(50, ⌊p/2⌋, p−1) genes by absolute t statistic against control cells, following Scanpy's `t-test_overestim_var`. It also reports Recall@50, the overlap between the observed set and the 50 genes with the largest predicted change, and the AUROC of the predicted change for membership in that set. The same metrics are computed for two reference predictors on the same perturbations, no change from control and the average shift seen across training perturbations, because a model that cannot beat the mean shift has not learned anything perturbation-specific. Scores are averaged per perturbation, and then across folds.
+For each held-out perturbation, `cellforge/autorun/scoring.py` compares mean profiles and reports MSE, PCC and R² over all genes, PCC on the change from control, and the same three metrics over the observed differentially expressed genes. That set is the top min(50, ⌊p/2⌋, p−1) genes by absolute t statistic against control cells, following Scanpy's `t-test_overestim_var`. It also reports Recall@50, the overlap between the observed set and the 50 genes with the largest predicted change, and the AUROC of the predicted change for membership in that set. `CELLFORGE_DE_TEST=wilcoxon`, or `--de-test wilcoxon` on the scorer, ranks the set by Scanpy's Wilcoxon z score instead, which is what the paper used for the multimodal readouts. Scores are averaged per perturbation, and then across folds.
+
+The same metrics are computed for three reference predictors on the same perturbations. The first predicts no change from control, and the second predicts the average shift seen across training perturbations. The third is the linear model of Ahlmann-Eltze, Huber and Anders ([*Nature Methods* 2025](https://doi.org/10.1038/s41592-025-02772-6)), which embeds genes by PCA of the training means and fits a ridge map from the embedding of a perturbed gene to the change it causes. It predicts any perturbation whose target genes are measured, adds the parts of a combination, and falls back to the mean shift for the rest, such as drugs.
+
+Most of the change from control is shared by all perturbations, so two further metrics look only at what is specific to each one (Viñas Torné et al., [*Nature Biotechnology* 2025](https://doi.org/10.1038/s41587-025-02777-8)). `PCC_delta_pert` correlates the predicted and observed change from the average training perturbation, on which the mean shift scores 0. `Discrimination` asks whether each prediction is closer to its own perturbation's observed effect than to the others', measured as in the perturbation discrimination score of the Arc Virtual Cell Challenge, where 1 is perfect and a constant prediction averages about 0.5.
 
 ## Results reported in the paper
 
-These numbers come from the paper and were produced with the authors' original pipeline, not with this rewrite. Each row is a model that CellForge designed for that dataset.
+These rankings come from the figures of the paper and were produced with the authors' original pipeline, not with this rewrite.
 
-| Dataset | Setting | Designed model | Reported outcome |
-|---|---|---|---|
-| Adamson 2016 | CRISPRi, scRNA-seq | CPA-X | highest PCC of all methods (0.9883); DE error above the best reference methods |
-| Norman 2019 | CRISPRa, single and paired | scGen-X | lowest MSE on DE genes (0.1736) |
-| Srivatsan 2020 | small molecules and doses | ChemCellFlow | second to CellFlow, which was built for this dataset |
-| Schiebinger 2019 | cytokine-driven differentiation | CPA-Traj | first on several global and DE metrics against generic baselines |
-| Papalexi 2021 | CRISPR, CITE-seq RNA and protein | totalGAT | lowest MSE for RNA and protein; protein recovery weaker than RNA |
-| Liscovitch-Brauer 2021 | CRISPR, scATAC-seq | ChromDDPM | lower overall; ahead of simple baselines on several metrics |
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="figs/ranks-dark.svg">
+  <img src="figs/ranks.svg" alt="Overall rank of CellForge and every reference method on seven held-out readouts: third, third and fourth on Adamson, Norman and Srivatsan, first on Schiebinger, Papalexi RNA, Papalexi protein and Liscovitch-Brauer.">
+</picture>
 
-In a blinded comparison of research plans against OpenAI, Perplexity and Gemini Deep Research, Biomni and a single-LLM baseline, CellForge had the highest mean score in 14 of 15 task and criterion combinations. The five LLM judges agreed with each other at r = 0.88 to 0.93, and human expert scores followed those judges more closely than CellForge's own discussion confidence, which correlated with the experts at r = 0.53. [docs/RESULTS.md](docs/RESULTS.md) has the architectures, cost, and the review of failed runs.
+On the three established benchmarks, CellForge ranks third, third and fourth overall, behind linear regression and random forest on all three and also behind the unperturbed control on Srivatsan. On the four readouts that have no published predictor, it ranks first each time. Its AUROC for recovering the differentially expressed genes is within 0.015 of the closest other method on every readout, and that method is one of the simple controls on six of the seven. [docs/RESULTS.md](docs/RESULTS.md) has the AUROC values, the designed architectures, the cost, the review of failed runs, and the places where the paper's text and its figures disagree.
+
+In a blinded comparison of research plans against OpenAI, Perplexity and Gemini Deep Research, Biomni and a single-LLM baseline, CellForge had the highest mean score in 14 of 15 task and criterion combinations. The five LLM judges agreed with each other at r = 0.88 to 0.93, and human expert scores followed those judges more closely than CellForge's own discussion confidence, which correlated with the experts at r = 0.53.
 
 ## Quick start
 
@@ -100,7 +112,7 @@ cellforge --dataset-path $DATA            # formulation, ideation, code generati
 for k in 0 1 2 3 4; do cellforge --phase autorun --dataset-path $DATA --fold $k; done
 ```
 
-Each phase can also run alone with `--phase task_analysis`, `method_design`, `code_generation` or `autorun`. For a cluster, add `--executor slurm` with `--partition`, `--gres`, `--mem`, `--slurm-time` and `--conda-env`, then score the finished jobs with `python -m cellforge.autorun.scoring <run folder>`. Any OpenAI-compatible endpoint works through `CUSTOM_API_URL`, and `MODEL_NAME` selects the provider by its prefix. Outputs go to `data/analyses`, `data/plans`, `data/discussion`, `data/codes` and `data/runs`.
+Each phase can also run alone with `--phase task_analysis`, `method_design`, `code_generation` or `autorun`. For a cluster, add `--executor slurm` with `--partition`, `--gres`, `--mem`, `--slurm-time` and `--conda-env`, then score the finished jobs with `python -m cellforge.autorun.scoring <run folder>`. `python -m cellforge.autorun.report data/runs --out results.md` collects every scored fold into one table per dataset, as mean and standard deviation next to the three reference predictors. Any OpenAI-compatible endpoint works through `CUSTOM_API_URL`, and `MODEL_NAME` selects the provider by its prefix. Outputs go to `data/analyses`, `data/plans`, `data/discussion`, `data/codes` and `data/runs`.
 
 ## Changes from the upstream code
 
@@ -121,7 +133,7 @@ The original repository had the three phases, but several of them did not pass t
 | TLS verification was disabled for DeepSeek, Llama, Qwen and custom endpoints, prompts were logged, and generated code ran with API keys in its environment | verification on, no prompt logging, secrets removed from the environment of generated code |
 | `temperature=0` became 0.7, reasoning models rejected `max_tokens`, and chat calls kept only the last user message | fixed |
 
-Unused code went with it: the legacy RAG system, the OpenHands backend, the Node SDK runner, about 2,000 lines of expert persona text that nothing read, and several agent variants. The Python went from 20,345 lines to 6,192, and the tests cover the split, the scorer, the discussion arithmetic, refinement, the hand-off between phases and an autorun round trip.
+Unused code went with it: the legacy RAG system, the OpenHands backend, the Node SDK runner, about 2,000 lines of expert persona text that nothing read, and several agent variants. The Python went from 20,345 lines to 7,450, tests included, and the tests cover the split, the scorer and its baselines, the discussion arithmetic, task-analysis refinement, the hand-off between phases, the smoke run, the refinement loop and an autorun round trip.
 
 </details>
 
@@ -137,8 +149,8 @@ cellforge/llm.py              one client for OpenAI, Anthropic, DeepSeek, Llama,
 cellforge/retrieval/          local corpus plus PubMed, Crossref and Semantic Scholar, with evidence IDs
 cellforge/Task_Analysis/      three analysts, the refinement agent, the report
 cellforge/Method_Design/      expert pool, graph discussion, plan synthesis
-cellforge/Code_Generation/    Codex backend, verifier, repair loop
-cellforge/autorun/            five-fold split, local and Slurm runs, scoring
+cellforge/Code_Generation/    Codex backend, verifier with the optional smoke run, repair loop
+cellforge/autorun/            five-fold split, local and Slurm runs, scoring, refinement loop, results report
 scripts/download_datasets.py  the six benchmark datasets from scPerturb, checksum-verified
 scripts/make_figures.py       every figure in this README and in docs/, light and dark
 ```

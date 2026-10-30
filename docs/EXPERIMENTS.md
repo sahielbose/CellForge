@@ -20,7 +20,7 @@ Start with Adamson (`AdamsonWeissman2016_GSM2406681_10X010.h5ad`) and Norman, th
 
 ## Stage 0: reference numbers, no LLM
 
-The harness scores the no-change and mean-shift predictors on any split, which gives the floor every designed model has to clear and takes a few minutes on a CPU.
+The harness scores three reference predictors on any split: no change, the mean shift, and the linear model on gene embeddings from Ahlmann-Eltze, Huber and Anders. Together they set the floor every designed model has to clear, and scoring them takes a few minutes on a CPU.
 
 ```python
 from pathlib import Path
@@ -30,10 +30,10 @@ data = Path("data/datasets/AdamsonWeissman2016_GSM2406681_10X010.h5ad")
 for k in range(5):
     split = prepare_split(data, data.parent / "splits" / "reference" / f"fold{k}", fold=k)
     result = score_predictions(None, split["test_h5ad"], split["train_h5ad"], split["perturbation_key"])
-    print(k, result["metrics"]["mean_shift"])
+    print(k, result["linear_coverage"], result["metrics"]["linear"], result["metrics"]["mean_shift"])
 ```
 
-The fold assignment depends only on the seed, so these folds are the same ones autorun builds. `python -m cellforge.autorun.scoring --baselines <split folder>` does the same for a single existing split.
+The fold assignment depends only on the seed, so these folds are the same ones autorun builds. `python -m cellforge.autorun.scoring --baselines <split folder>` does the same for a single existing split. `linear_coverage` is the share of test perturbations whose target genes are measured, so the linear model could predict them. Check it before reading the linear row: a label such as `KLF1` or `KLF1+CEBPA` is covered, while a label that carries a guide suffix or names a drug falls back to the mean shift.
 
 ## Stage 1: reproduce the paper (C0)
 
@@ -45,13 +45,16 @@ for run in 1 2 3; do
   cellforge --dataset-path $DATA
   for k in 0 1 2 3 4; do
     cellforge --phase autorun --dataset-path $DATA --fold $k --executor slurm \
-              --partition gpu --gres gpu:1 --mem 64G --slurm-time 24:00:00
+              --partition gpu --gres gpu:1 --mem 64G --slurm-time 24:00:00 --select-ratio 0.1
   done
 done
 python -m cellforge.autorun.scoring data/runs/<dataset>/<run folder>   # after each set of jobs
+python -m cellforge.autorun.report data/runs --out docs/RESULTS-measured.md
 ```
 
-Report the fold-averaged metrics as a mean and standard deviation over the three runs, next to the two reference predictors and the paper's figures (PCC 0.9883 on Adamson, MSE on DE genes 0.1736 on Norman). Absolute MSE depends on normalization, so compare MSE within a dataset and treat PCC on the change from control as the main cross-check, because the mean-shift baseline already scores well on plain PCC. The first number to send back from this stage is the measured time per training job, since it sets the budget for everything after it.
+`--select-ratio 0.1` holds the same selection perturbations out of training that C1 uses for its decisions, so C0 and C1 train on identical data and differ only in the loop. Set `CODEGEN_SMOKE_TEST=true` for every condition, or for none, since it changes how often a script reaches training.
+
+Report the fold-averaged metrics as a mean and standard deviation over the three runs, next to the three reference predictors and the paper's figures ([RESULTS.md](RESULTS.md) lists the AUROC values and ranks). Absolute MSE depends on normalization, so compare MSE within a dataset and treat PCC on the change from control as the main cross-check, because the mean-shift baseline already scores well on plain PCC. The first number to send back from this stage is the measured time per training job, since it sets the budget for everything after it.
 
 ## Stage 2: what the discussion contributes
 
@@ -71,11 +74,11 @@ Besides the test metrics, record the tokens used and the architecture each run c
 
 ## Stage 3: search with real scores
 
-These conditions follow the lab's action plan. They replace "discuss, then build once" with a search that uses validation scores, and they need code that does not exist yet. The comparison runs on Adamson and Norman with at least three repeats each, and every condition gets the same number of evaluations.
+These conditions follow the lab's action plan. They replace "discuss, then build once" with a search that uses scores on held-out selection perturbations. C1 is built (`--refine-rounds`, with `--refine-branches` and `--flush-at` for the variants described in the README), and C2 to C5 still need code. The comparison runs on Adamson and Norman with at least three repeats each, and every condition gets the same number of evaluations.
 
 | Condition | What runs | Question |
 |---|---|---|
-| C1 | one coding agent in a closed loop: train, read the validation score and diagnostics, edit, and keep the edit only if it beats the best score by more than run-to-run noise | does feedback alone help? |
+| C1 | one coding agent in a closed loop: train, read the selection score and diagnostics, edit, and keep the edit only if its paired gain exceeds one standard error | does feedback alone help? |
 | C2 | four independent C1 runs, best kept | is any gain from C1 just more samples? |
 | C3 | Fork-and-Flush on C1: four starting agents, the best becomes the leader, and at 33% and 66% of the budget the leader is forked into four branches that keep the files but start with an empty conversation, each with about 6% of the budget | does escaping a fixed line of ideas help? |
 | C4 | a team of four agents that share candidates as git commits with their scores, with three forgets per run that clear every session and restart all agents from the best candidate | do shared scores and forgetting help? |
@@ -85,16 +88,15 @@ The settings for C3 and C4 come from the Fork-and-Flush paper (arXiv 2610.07447)
 
 ## Changes still to build
 
-Ordered by how much each would change what the benchmark can say.
+Ordered by how much each would change what the benchmark can say. The linear baseline, the smoke run, the C1 loop and the Wilcoxon DE ranking from the first version of this list are now built.
 
 | Change | Why | Size |
 |---|---|---|
-| linear and random-forest predictors owned by the harness, including the linear model on gene embeddings from Ahlmann-Eltze, Huber and Anders (*Nature Methods* 2025) | they are part of the paper's reference set, and a designed model that does not beat a linear model has not justified its size | small; needs a check of how each dataset names its targets |
-| a verifier run on a small subsample before any GPU job is launched | today the verifier only compiles the script and reads its `--help`, while the paper's review attributes 64% of failures to execution errors and invalid types | small |
-| the closed loop (C1) inside autorun | every later condition builds on it | medium |
-| Fork-and-Flush and the forgetting team (C3, C4), sharing one store of scored commits | the main search methods to compare | medium |
+| a random-forest predictor owned by the harness | the paper's controls include it, and it leads Adamson overall | small |
+| Fork-and-Flush and the forgetting team (C3, C4), sharing one store of scored commits | the main search methods to compare; `--refine-branches` and `--flush-at` cover only the greedy part | medium |
 | GEPA prompt tuning (C5) | the third search method | medium |
 | the discussion's plan as one starting candidate among the published models and the baselines, with a fixed budget in place of the consensus rule | lets measured scores, not the critic, pick the design | medium |
-| Wilcoxon ranking of DE genes for the multimodal readouts | matches the paper's protocol exactly for Papalexi and Liscovitch-Brauer | small |
+| a confirm half of the selection set, scored only when an edit is kept | the accept rule still reuses one selection set for every decision, so a long search can overfit it | small |
+| a calibration log of critic scores against measured selection scores (Kendall tau per run) | shows whether the critic's confidence predicts how a design trains; the paper compared it only with expert ratings of plans (r = 0.53) | small |
 | a map of design diversity across runs, built from the plans and scripts already generated | answers the paper's open question about whether the discussion diversifies designs; needs only LLM calls | small |
 | one dataset published after the language model's training cutoff | separates design ability from memory of published models | depends on the dataset |

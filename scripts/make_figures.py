@@ -15,12 +15,50 @@ THEMES = {
         "ink": "#1f2328", "muted": "#59636e", "faint": "#818b98", "line": "#d1d9e0", "panel": "#f6f8fa",
         "accent": "#0b6e6e", "accent_soft": "#d3ecea", "phase": ["#3554b8", "#6a3fb5", "#0b6e6e"],
         "ramp": ["#0b6e6e", "#3f9a96", "#8cc5c0"], "train": "#d8dee4", "control": "#8c959f",
+        "behind": "#b4561c", "low": "#e8f3f2", "on_dark": "#ffffff",
     },
     "dark": {
         "ink": "#e6edf3", "muted": "#9198a1", "faint": "#6e7681", "line": "#3d444d", "panel": "#151b23",
         "accent": "#4fc4b8", "accent_soft": "#173a38", "phase": ["#7d9cf0", "#ab8bf0", "#4fc4b8"],
         "ramp": ["#6fd9cc", "#3c9e95", "#256a64"], "train": "#2f363d", "control": "#6e7681",
+        "behind": "#f0a46a", "low": "#1b2a2c", "on_dark": "#0d1117",
     },
+}
+
+# Read from the paper's Figure 3g and 4g (overall rank, aggregated over eight metrics) and Figure 3f and 4f
+# (AUROC of DE-gene recovery). None marks a method that was not run on that readout.
+READOUTS = [("Adamson", "CRISPRi"), ("Norman", "CRISPRa"), ("Srivatsan", "drugs"), ("Schiebinger", "cytokines"),
+            ("Papalexi", "RNA"), ("Papalexi", "protein"), ("Liscovitch", "ATAC")]
+_ = None
+OVERALL_RANK = {
+    "CellForge": [3, 3, 4, 1, 1, 1, 1],
+    "Linear": [2, 1, 1, 3, 2, 4, 2],
+    "RF": [1, 2, 2, 5, 3, 2, 3],
+    "Unperturbed": [4, 6, 3, 6, 5, 5, 6],
+    "CellFlow": [5, 4, 5, 7, _, _, _],
+    "STATE": [7, 5, 6, _, _, _, _],
+    "GEARS": [6, 7, _, _, _, _, _],
+    "scGPT": [8, 8, _, _, _, _, _],
+    "Biolord": [9, 9, 7, _, _, _, _],
+    "CPA": [10, 10, 8, _, _, _, _],
+    "ChemCPA": [_, _, 8, _, _, _, _],
+    "GNN": [_, _, _, 2, 4, 3, 4],
+    "Transformer": [_, _, _, 4, 6, 6, 5],
+}
+AUROC = {
+    "CellForge": [0.954, 0.965, 0.973, 0.986, 0.906, 0.619, 0.796],
+    "Linear": [0.941, 0.963, 0.981, 0.980, 0.902, 0.606, 0.792],
+    "RF": [0.946, 0.962, 0.983, 0.974, 0.904, 0.595, 0.793],
+    "Unperturbed": [0.919, 0.926, 0.977, 0.953, 0.883, 0.490, 0.627],
+    "CellFlow": [0.927, 0.952, 0.980, 0.960, _, _, _],
+    "STATE": [0.935, 0.966, 0.955, _, _, _, _],
+    "GEARS": [0.940, 0.952, _, _, _, _, _],
+    "scGPT": [0.934, 0.935, _, _, _, _, _],
+    "Biolord": [0.881, 0.903, 0.754, _, _, _, _],
+    "CPA": [0.937, 0.934, 0.779, _, _, _, _],
+    "ChemCPA": [_, _, 0.775, _, _, _, _],
+    "GNN": [_, _, _, 0.980, 0.871, 0.606, 0.785],
+    "Transformer": [_, _, _, 0.958, 0.771, 0.570, 0.734],
 }
 
 
@@ -154,7 +192,7 @@ def pipeline(theme):
     c.line(x + W / 2 - 40, 114, x + W / 2 - 40, 134, arrow=True)
     c.line(x + W / 2 + 40, 138, x + W / 2 + 40, 118, arrow=True)
     c.text(x + W / 2 + 48, 130, "repair with the failure report", 10.5, color="faint", italic=True)
-    c.box(x, 138, W, 50, "Verifier", "compiles the script, checks --help for the five autorun flags")
+    c.box(x, 138, W, 50, "Verifier", "compiles, checks --help, and can run the script on control cells")
     c.line(x + W / 2, 188, x + W / 2, 208, arrow=True)
     # split strip
     c.rect(x, 212, W, 60, fill="panel", stroke="line")
@@ -174,8 +212,16 @@ def pipeline(theme):
     c.rect(x, 366, W, 62, fill="accent_soft", stroke="accent")
     c.text(x + W / 2, 388, "Harness scorer", 12.5, weight=600, anchor="middle")
     c.text(x + W / 2, 404, "MSE, PCC, R², DE metrics, Recall, AUROC", 11, color="muted", anchor="middle")
-    c.text(x + W / 2, 419, "against no-change and mean-shift baselines", 11, color="muted", anchor="middle")
+    c.text(x + W / 2, 419, "against no-change, mean-shift and linear baselines", 11, color="muted", anchor="middle")
     c.line(x + W / 2, 428, x + W / 2, 444, arrow=True)
+    # the opt-in refinement loop: selection scores go back to the coding agent
+    c.path(f"M{x + W},{386} C{x + W + 16},{386} {x + W + 16},{91} {x + W},{91}", color="accent", arrow=True,
+           dash="4 3")
+    ry = 240
+    c.add(f'<text x="{x + W + 5}" y="{ry}" font-family="{SANS}" font-size="10.5" font-style="italic" '
+          f'fill="{t["accent"]}" text-anchor="middle" transform="rotate(-90 {x + W + 5} {ry})" '
+          f'paint-order="stroke" stroke="{t["panel"] if theme == "dark" else "#ffffff"}" stroke-width="4">'
+          f'refinement loop, opt-in</text>')
     c.doc(x + 94, 448, 180, 44, "test_scores.json", "per held-out fold")
 
     # hand-offs between phases, and the legend
@@ -192,7 +238,7 @@ def pipeline(theme):
 
 
 def evaluation(theme):
-    c = Canvas(1120, 330, theme, "Five-fold split over perturbation identities, with scoring done by the harness")
+    c = Canvas(1120, 350, theme, "Five-fold split over perturbation identities, with scoring done by the harness")
     n, folds, size, gap = 20, 5, 17, 5
     gx, gy = 120, 64
     c.text(24, 34, "Perturbation identities, shuffled once with a fixed seed", 15, weight=650)
@@ -231,14 +277,15 @@ def evaluation(theme):
     c.line(x + W / 2, 106, x + W / 2, 126, arrow=True)
     c.box(x, 130, W, 46, "predictions.h5ad", "one mean log1p(CP10k) profile per test perturbation", title_mono=True)
     c.line(x + W / 2, 176, x + W / 2, 196, arrow=True)
-    c.rect(x, 200, W, 104, fill="accent_soft", stroke="accent")
+    c.rect(x, 200, W, 120, fill="accent_soft", stroke="accent")
     c.text(x + 14, 222, "Harness scorer", 12.5, weight=600)
     c.text(x + W - 14, 222, "holds test.h5ad", 11, color="muted", anchor="end")
     rows = [
         ("all genes", "MSE, PCC, R², PCC on the change from control"),
         ("DE genes", "top min(50, p/2) by |t| vs control: MSE, PCC, R²"),
         ("ranking", "Recall@50 and AUROC of |predicted change|"),
-        ("baselines", "no change, and the mean training shift"),
+        ("specific", "PCC from the mean perturbation, discrimination"),
+        ("baselines", "no change, mean training shift, linear model"),
     ]
     for i, (k, v) in enumerate(rows):
         c.text(x + 14, 244 + i * 16, k, 11, color="ink", weight=600, mono=True)
@@ -314,6 +361,111 @@ def coordination(theme):
     return c.svg()
 
 
+def _mix(a, b, f):
+    """Blend two #rrggbb colors, f = 0 gives a and f = 1 gives b."""
+
+    ca, cb = (tuple(int(c[i:i + 2], 16) for i in (1, 3, 5)) for c in (a, b))
+    return "#" + "".join(f"{round(x + (y - x) * f):02x}" for x, y in zip(ca, cb, strict=True))
+
+
+def _luminance(color):
+    r, g, b = (int(color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _readable(fill, *inks):
+    """The ink with the larger luminance difference from the fill."""
+
+    return max(inks, key=lambda ink: abs(_luminance(ink) - _luminance(fill)))
+
+
+def ranks(theme):
+    groups = [("", ["CellForge"]), ("simple controls", ["Linear", "RF", "Unperturbed"]),
+              ("published models", ["CellFlow", "STATE", "GEARS", "scGPT", "Biolord", "CPA", "ChemCPA"]),
+              ("generic deep models", ["GNN", "Transformer"])]
+    n_rows = sum(len(m) for _, m in groups)
+    cw, ch, gap, x0, y0 = 74, 26, 22, 150, 118
+    width = x0 + 7 * cw + gap + 24
+    c = Canvas(width, y0 + n_rows * ch + 3 * 18 + 34, theme,
+               "Overall rank of CellForge and every reference method on seven held-out readouts, from the paper's "
+               "Figures 3g and 4g")
+    t = c.t
+    c.text(24, 30, "Overall rank on held-out perturbations", 15, weight=650)
+    c.text(24, 47, "Aggregate of eight metrics, 1 is best, blank where a method was not run (paper, Fig. 3g and 4g)",
+           11.5, color="muted")
+
+    def col_x(j):
+        return x0 + j * cw + (gap if j >= 3 else 0)
+
+    for j0, j1, label in ((0, 3, "established benchmarks"), (3, 7, "tasks with no published predictor")):
+        c.text((col_x(j0) + col_x(j1 - 1) + cw) / 2, 74, label, 11, color="faint", anchor="middle", italic=True)
+        c.line(col_x(j0) + 4, 80, col_x(j1 - 1) + cw - 4, 80, color="line", width=1)
+    for j, (name, readout) in enumerate(READOUTS):
+        c.text(col_x(j) + cw / 2, 96, name, 11.5, weight=600, anchor="middle")
+        c.text(col_x(j) + cw / 2, 110, readout, 10.5, color="muted", anchor="middle")
+    worst = [max(OVERALL_RANK[m][j] or 0 for m in OVERALL_RANK) for j in range(7)]
+    y = y0
+    for label, methods in groups:
+        if label:
+            y += 18
+            c.text(24, y - 5, label, 10.5, color="faint", italic=True)
+        for m in methods:
+            is_us = m == "CellForge"
+            c.text(x0 - 12, y + ch / 2 + 4.5, m, 12, color="accent" if is_us else "ink", weight=650 if is_us else 400,
+                   anchor="end")
+            for j, rank in enumerate(OVERALL_RANK[m]):
+                x = col_x(j)
+                if rank is None:
+                    c.text(x + cw / 2, y + ch / 2 + 4, "·", 12, color="faint", anchor="middle")
+                    continue
+                f = (rank - 1) / (worst[j] - 1)
+                fill = _mix(t["accent"], t["low"], f ** 0.8)
+                c.rect(x + 2, y + 2, cw - 4, ch - 4, fill=fill, stroke=fill, r=4)
+                c.text(x + cw / 2, y + ch / 2 + 4.5, str(rank), 12, weight=650 if rank == 1 else 400,
+                       color=_readable(fill, t["ink"], t["on_dark"]), anchor="middle")
+            y += ch
+    return c.svg()
+
+
+def auroc_margin(theme):
+    c = Canvas(760, 372, theme, "CellForge AUROC of DE-gene recovery minus the best other method on each readout, "
+                                "from the paper's Figures 3f and 4f")
+    t = c.t
+    x_mid, scale, y0, bar, step = 300, 9000, 92, 16, 30
+    value_x = x_mid + 0.015 * scale + 22
+    c.text(24, 30, "How far CellForge leads or trails on DE-gene recovery", 15, weight=650)
+    c.text(24, 47, "AUROC of CellForge minus the best other method on the same readout (paper, Fig. 3f and 4f)",
+           11.5, color="muted")
+    rows = []
+    for j, (name, readout) in enumerate(READOUTS):
+        others = {m: v[j] for m, v in AUROC.items() if m != "CellForge" and v[j] is not None}
+        best = max(others.values())
+        rival = " and ".join(m for m, v in others.items() if v == best)
+        rows.append((f"{name} {readout}", AUROC["CellForge"][j] - best, rival, best))
+    top, bottom = y0 - 14, y0 + len(rows) * step
+    for v in (-0.01, 0.0, 0.01):
+        x = x_mid + v * scale
+        c.line(x, top, x, bottom, color="faint" if v == 0 else "line", width=1)
+        c.text(x, bottom + 16, f"{v:+.2f}" if v else "0", 10.5, color="faint", anchor="middle")
+    c.text(x_mid - 8, top - 4, "trails", 10.5, color="faint", anchor="end", italic=True)
+    c.text(x_mid + 8, top - 4, "leads", 10.5, color="faint", italic=True)
+    c.text(value_x + 48, top - 4, "closest other method", 10.5, color="faint", anchor="end", italic=True)
+    for i, (label, diff, rival, best) in enumerate(rows):
+        y = y0 + i * step
+        c.text(x_mid - 0.012 * scale - 14, y + bar - 3, label, 12, anchor="end")
+        w = abs(diff) * scale
+        x = x_mid if diff >= 0 else x_mid - w
+        c.add(f'<rect x="{x:.1f}" y="{y}" width="{w:.1f}" height="{bar}" rx="3" '
+              f'fill="{t["accent"] if diff >= 0 else t["behind"]}"/>')
+        c.text(value_x + 48, y + bar - 3, f"{diff:+.3f}", 11.5, weight=600, anchor="end")
+        c.text(value_x + 60, y + bar - 3, f"{rival}, {best:.3f}", 11.5, color="muted")
+    c.text(24, bottom + 48, "Every gap is within 0.015 AUROC, and a simple control (linear, random forest or", 11.5,
+           color="muted")
+    c.text(24, bottom + 65, "unperturbed) is the closest other method on six of the seven readouts.", 11.5,
+           color="muted")
+    return c.svg()
+
+
 def mark(theme):
     t = THEMES[theme]
     pts = [(60 + 23 * math.cos(math.radians(a)), 60 + 23 * math.sin(math.radians(a))) for a in (-90, 30, 150)]
@@ -331,7 +483,8 @@ def main():
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1] / "figs"
     out.mkdir(parents=True, exist_ok=True)
     for name, fn in (("pipeline", pipeline), ("evaluation", evaluation), ("failure-modes", failure_modes),
-                     ("coordination", coordination), ("mark", mark)):
+                     ("coordination", coordination), ("mark", mark), ("ranks", ranks),
+                     ("auroc-margin", auroc_margin)):
         for theme in THEMES:
             suffix = "" if theme == "light" else "-dark"
             (out / f"{name}{suffix}.svg").write_text(fn(theme), encoding="utf-8")

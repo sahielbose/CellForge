@@ -3,7 +3,7 @@
 The split sets aside selection perturbations that the script is asked to
 predict but never receives, mixed in with the test perturbations. Each round,
 the coding agent gets the current best script, its selection scores against the
-two reference predictors, the tail of its training log and a journal of earlier
+reference predictors, the tail of its training log and a journal of earlier
 attempts, and makes one change. A candidate that fails in training gets one
 debug turn with its error log. A candidate replaces the best script only if its
 gain, paired by perturbation, exceeds both ``min_gain`` and ``z`` standard
@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 LOWER_IS_BETTER = {"MSE", "MSE_DE"}
-REPORTED = ("PCC_delta", "MSE_DE", "PCC_DE", "Recall", "AUROC", "MSE")
+REPORTED = ("PCC_delta", "PCC_delta_pert", "Discrimination", "MSE_DE", "PCC_DE", "Recall", "AUROC", "MSE")
+REFERENCES = (("mean_shift", "mean shift"), ("linear", "linear"), ("no_change", "no change"))
 
 Run = Callable[[str, str], Any]  # (script, tag) -> JobRecord
 Score = Callable[[Any], Optional[Dict[str, Any]]]  # job -> selection scores, or None when it wrote no predictions
@@ -37,14 +38,16 @@ def _log_tail(job, lines: int = 30) -> str:
 
 def feedback(score: Dict[str, Any], metric: str, journal: List[str], job) -> str:
     metrics = score["metrics"]
+    columns = ["model"] + [key for key, _ in REFERENCES if metrics.get(key)]
     rows = "\n".join(
-        f"{name:<10} {metrics['model'][name]:>9.4f} {metrics['mean_shift'][name]:>11.4f} {metrics['no_change'][name]:>10.4f}"
-        for name in REPORTED
+        f"{name:<15}" + "".join(f"{metrics[c][name]:>12.4f}" for c in columns)
+        for name in REPORTED if name in metrics["model"]
     )
+    header = f"{'metric':<15}" + "".join(f"{dict(REFERENCES, model='this script')[c]:>12}" for c in columns)
     direction = "lower" if metric in LOWER_IS_BETTER else "higher"
     return (
         f"SELECTION SCORES on {score['n_scored']} unseen perturbations (the target is {metric}, {direction} is better)\n"
-        f"{'metric':<10} {'this script':>9} {'mean shift':>11} {'no change':>10}\n{rows}\n\n"
+        f"{header}\n{rows}\n\n"
         f"PREVIOUS ATTEMPTS\n{chr(10).join(journal) or '- none yet'}\n\n"
         f"END OF THE TRAINING LOG\n{_log_tail(job)}"
     )
@@ -90,6 +93,9 @@ def refine(
     record: Dict[str, Any] = {"metric": metric, "rounds": rounds, "branches": branches, "evaluations": 1, "attempts": []}
     if best is None:
         record["error"] = "the starting script wrote no predictions, so there is nothing to refine"
+        return best_file, best_job, record
+    if metric not in best["metrics"]["model"]:
+        record["error"] = f"{metric} is not defined on this selection set (Discrimination needs two perturbations)"
         return best_file, best_job, record
 
     def evaluate(path: str, tag: str):

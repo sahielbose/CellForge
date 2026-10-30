@@ -263,7 +263,8 @@ def build_parser() -> argparse.ArgumentParser:
     loop.add_argument("--refine-rounds", type=int, default=0, help="rounds of edit, train and score per task")
     loop.add_argument("--refine-branches", type=int, default=1, help="independent edits tried per round")
     loop.add_argument("--refine-metric", default="PCC_delta",
-                      choices=["PCC_delta", "MSE_DE", "PCC_DE", "Recall", "AUROC", "MSE", "PCC"],
+                      choices=["PCC_delta", "PCC_delta_pert", "Discrimination", "MSE_DE", "PCC_DE", "Recall", "AUROC",
+                               "MSE", "PCC"],
                       help="selection metric a candidate must improve")
     loop.add_argument("--flush-at", default="", help="fractions of the rounds at which to clear the journal, e.g. 0.33,0.66")
     loop.add_argument("--select-ratio", type=float, default=None,
