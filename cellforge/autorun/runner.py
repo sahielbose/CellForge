@@ -141,8 +141,6 @@ def run_autorun(
     timeout_hours: float = 8.0,
     approve: Optional[Callable[[str, str], bool]] = None,
 ) -> Dict[str, Any]:
-    from ..Code_Generation import generate_code_from_plan_task
-
     dataset_file = find_h5ad(str(resolve_workspace_path(dataset_path)))
     dataset_name = _slug(dataset_file.stem)
     plan_root = resolve_workspace_path(plans_dir) if plans_dir else data_path("plans", dataset_name)
@@ -150,7 +148,7 @@ def run_autorun(
     if not plans:
         raise FileNotFoundError(f"No research plan in {plan_root}; run method design first")
     plan = json.loads(plans[-1].read_text(encoding="utf-8"))
-    task_ids = [block["task_id"] for block in plan.get("task_wise_plan", [])] or ["T01"]
+    task_ids = plan_task_ids(plan)
     task_ids = task_ids[:max_tasks] if max_tasks else task_ids
 
     tag = f"fold{fold}of{n_folds}_val{round(split_val_ratio * 100)}_seed{split_seed}"
@@ -162,8 +160,7 @@ def run_autorun(
     for task_id in task_ids:
         logs_dir = run_root / task_id / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
-        code_file = generate_code_from_plan_task(plan, task_id=task_id, output_dir=str(run_root / task_id / "code"),
-                                                 backend=codegen_backend)
+        code_file = code_for(plan, plans[-1], task_id, codegen_backend)
         if not code_file:
             jobs.append(JobRecord(task_id, "", "codegen_failed", "", str(logs_dir), error="code generation failed"))
             continue
@@ -199,6 +196,34 @@ def run_autorun(
     run_root.mkdir(parents=True, exist_ok=True)
     (run_root / "autorun_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     return summary
+
+
+def plan_task_ids(plan: Dict[str, Any]) -> List[str]:
+    """The plan's task blocks, or one task covering the whole plan when it has none."""
+
+    return [str(block["task_id"]) for block in plan.get("task_wise_plan", []) if block.get("task_id")] or ["T01"]
+
+
+def code_for(plan: Dict[str, Any], plan_file: Path, task_id: str, backend: str) -> Optional[str]:
+    """Generate a task's script once per plan, so every fold trains the same design.
+
+    The code generation phase and autorun share this cache under
+    data/codes/<dataset>/<plan>/<task>.
+    """
+
+    from .. import Code_Generation
+
+    code_dir = data_path("codes", plan_file.parent.name, plan_file.stem, task_id)
+    record = code_dir / "script_path.txt"
+    if record.exists() and Path(record.read_text(encoding="utf-8").strip()).exists():
+        return record.read_text(encoding="utf-8").strip()
+    scoped = task_id if plan.get("task_wise_plan") else None
+    code_file = Code_Generation.generate_code_from_plan_task(plan, task_id=scoped, output_dir=str(code_dir),
+                                                             backend=backend)
+    if code_file:
+        code_dir.mkdir(parents=True, exist_ok=True)
+        record.write_text(str(code_file), encoding="utf-8")
+    return code_file
 
 
 def _run_local(task_id, code_file, command, logs_dir: Path, env, timeout_hours) -> JobRecord:

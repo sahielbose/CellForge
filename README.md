@@ -32,7 +32,7 @@ Because the score moves 70% of the way toward the current reviews in each round,
 
 ### Execution
 
-The code is in `cellforge/Code_Generation` and `cellforge/autorun`. The Codex CLI writes a training script for each task block of the plan. A verifier compiles it and checks that its `--help` lists the five flags the runner passes, and failures go back to Codex as a structured report for a bounded number of repairs. The runner then trains the script on one fold of the data, locally or through Slurm, and scores its predictions.
+The code is in `cellforge/Code_Generation` and `cellforge/autorun`. The Codex CLI writes a training script for each task block of the plan. A verifier compiles it and checks that its `--help` lists the five flags the runner passes, and failures go back to Codex as a structured report for a bounded number of repairs. A script is written once per plan and reused for all five folds, so every fold trains the same design. The runner trains it on one fold at a time, locally or through Slurm, and scores its predictions.
 
 ## Evaluation
 
@@ -41,7 +41,7 @@ The code is in `cellforge/Code_Generation` and `cellforge/autorun`. The Codex CL
   <img src="figs/evaluation.svg" alt="Perturbation identities are split into five folds; the generated script sees training data and test names, and the harness scores its predictions.">
 </picture>
 
-The split and the metrics follow the paper. Perturbation identities are shuffled once with a fixed seed and divided into five folds, and each run holds one fold out for testing, so a model is always scored on perturbations it did not train on. Control cells stay in training because every prediction is made relative to them. The generated script receives the training and validation files and the names of the test perturbations, and writes one predicted mean profile (log1p of counts per 10k) per test perturbation to `predictions.h5ad`. Test expression stays with the harness.
+The split and the metrics follow the paper. Perturbation identities are shuffled once with a fixed seed and divided into five folds, and each run holds one fold out for testing, so a model is always scored on perturbations it did not train on. Control cells stay in training because every prediction is made relative to them. The generated script receives the training and validation files and the names of the test perturbations, and writes one predicted mean profile (log1p of counts per 10k) per test perturbation to `predictions.h5ad`, while the test expression itself stays with the harness.
 
 For each held-out perturbation, `cellforge/autorun/scoring.py` compares mean profiles and reports MSE, PCC and R² over all genes, PCC on the change from control, and the same three metrics over the observed differentially expressed genes. That set is the top min(50, ⌊p/2⌋, p−1) genes by absolute t statistic against control cells, following Scanpy's `t-test_overestim_var`. It also reports Recall@50, the overlap between the observed set and the 50 genes with the largest predicted change, and the AUROC of the predicted change for membership in that set. The same metrics are computed for two reference predictors on the same perturbations, no change from control and the average shift seen across training perturbations, because a model that cannot beat the mean shift has not learned anything perturbation-specific. Scores are averaged per perturbation, and then across folds.
 
@@ -92,7 +92,7 @@ The original repository had the three phases, but several of them did not pass t
 | TLS verification was disabled for DeepSeek, Llama, Qwen and custom endpoints, prompts were logged, and generated code ran with API keys in its environment | verification on, no prompt logging, secrets removed from the environment of generated code |
 | `temperature=0` became 0.7, reasoning models rejected `max_tokens`, and chat calls kept only the last user message | fixed |
 
-Unused code went with it: the legacy RAG system, the OpenHands backend, the Node SDK runner, about 2,000 lines of expert persona text that nothing read, and several agent variants. The Python went from 20,345 lines to 5,630, and the tests cover the split, the scorer, the discussion arithmetic, refinement, the hand-off between phases and an autorun round trip.
+Unused code went with it: the legacy RAG system, the OpenHands backend, the Node SDK runner, about 2,000 lines of expert persona text that nothing read, and several agent variants. The Python went from 20,345 lines to 5,851, and the tests cover the split, the scorer, the discussion arithmetic, refinement, the hand-off between phases and an autorun round trip.
 
 ## Repository layout
 

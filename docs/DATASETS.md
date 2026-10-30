@@ -23,7 +23,7 @@ Adamson comes as three files, one per GEO sample (GSM2406675, GSM2406677 and GSM
 
 Any `.h5ad` works if it has these two things.
 
-The perturbation label is read from the first of these `obs` columns that exists: `perturbation`, `perturbation_id`, `gene`, `target_gene`, `condition`, `guide_identity`. The scPerturb files use `perturbation`.
+The perturbation label is read from the first of these `obs` columns that exists: `perturbation`, `perturbation_id`, `gene`, `target_gene`, `condition`, `guide_identity`, and the scPerturb files use `perturbation`.
 
 Control cells are recognized by their label. A label counts as a control if it contains `control`, `ctrl`, `non-targeting`, `nontargeting`, `non_targeting`, `unperturbed`, `dmso` or `vehicle`, or is exactly `nt`, `none` or `*`, ignoring case. All control labels are pooled into one reference group, and a dataset with no control cells cannot be split, because every prediction is made relative to them.
 

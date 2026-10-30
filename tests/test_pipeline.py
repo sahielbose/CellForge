@@ -377,9 +377,14 @@ def test_autorun_runs_and_scores_a_generated_script(screen, tmp_path, monkeypatc
     plans.mkdir()
     (plans / "research_plan_1.json").write_text(json.dumps({"task_wise_plan": [{"task_id": "T01"}]}))
     monkeypatch.setenv("CELLFORGE_WORKSPACE_DIR", str(tmp_path))
-    monkeypatch.setattr(codegen, "generate_code_from_plan_task", lambda plan, task_id, output_dir, backend: str(script))
+    calls = []
+    monkeypatch.setattr(codegen, "generate_code_from_plan_task",
+                        lambda plan, task_id, output_dir, backend: calls.append(task_id) or str(script))
 
     summary = run_autorun(dataset_path=str(screen), plans_dir=str(plans), fold=2)
+    run_autorun(dataset_path=str(screen), plans_dir=str(plans), fold=3)
+
+    assert calls == ["T01"]  # the second fold reuses the first fold's script
 
     job = summary["jobs"][0]
     assert job["status"] == "completed", job["error"]
@@ -388,6 +393,32 @@ def test_autorun_runs_and_scores_a_generated_script(screen, tmp_path, monkeypatc
     # the script predicts the mean shift, so it scores exactly as the mean-shift baseline
     assert score["metrics"]["model"]["PCC_delta"] == pytest.approx(score["metrics"]["mean_shift"]["PCC_delta"], abs=1e-4)
     assert summary["split"]["fold"] == 2
+
+
+def test_code_generation_phase_and_autorun_share_one_script(screen, tmp_path, monkeypatch):
+    import importlib.util
+
+    import cellforge.Code_Generation as codegen
+    from cellforge.autorun import run_autorun
+
+    spec = importlib.util.spec_from_file_location("cellforge_cli", Path(__file__).resolve().parents[1] / "main.py")
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    script = tmp_path / "result.py"
+    script.write_text(MEAN_SHIFT_SCRIPT, encoding="utf-8")
+    plans = tmp_path / "data" / "plans" / "toy_screen"
+    plans.mkdir(parents=True)
+    (plans / "research_plan_1.json").write_text(json.dumps({"summary": "a plan with no task blocks"}))
+    monkeypatch.setenv("CELLFORGE_WORKSPACE_DIR", str(tmp_path))
+    calls = []
+    monkeypatch.setattr(codegen, "generate_code_from_plan_task",
+                        lambda plan, task_id, output_dir, backend: calls.append(task_id) or str(script))
+
+    assert cli.run_code_generation({"dataset_path": str(screen)})
+    summary = run_autorun(dataset_path=str(screen), fold=1)
+
+    assert calls == [None]  # the whole plan, generated once by the phase and reused by autorun
+    assert summary["jobs"][0]["status"] == "completed", summary["jobs"][0]["error"]
 
 
 def test_critic_only_ablation_skips_peer_calls():

@@ -126,7 +126,7 @@ def run_method_design(config: Dict[str, Any]) -> bool:
 
 
 def run_code_generation(config: Dict[str, Any]) -> bool:
-    from cellforge.Code_Generation import generate_code_from_plan, generate_code_from_plan_task
+    from cellforge.autorun.runner import code_for, plan_task_ids
 
     print("\n== Phase 3: code generation ==")
     dataset_path = config.get("dataset_path")
@@ -141,23 +141,22 @@ def run_code_generation(config: Dict[str, Any]) -> bool:
         print(f"Plan {plan_file}\n  source: {plan.get('plan_source')}\n  model: {architecture}\n  {plan.get('summary', '')}")
         if not approve("Generate code for this plan?"):
             return False
-    out = data_path("codes", plan_file.parent.name)
-    out.mkdir(parents=True, exist_ok=True)
     backend = config.get("code_generation", {}).get("backend", "codex")
     task_id = os.getenv("CODEGEN_TASK_ID", "").strip()
-    try:
-        if task_id:
-            code = generate_code_from_plan_task(plan, task_id=task_id, output_dir=str(out), backend=backend)
+    tasks = [task_id] if task_id else plan_task_ids(plan)
+    written = 0
+    for task in tasks:
+        try:
+            code = code_for(plan, plan_file, task, backend)
+        except Exception as exc:
+            print(f"{task}: code generation failed: {exc}")
+            continue
+        if code and Path(code).exists():
+            written += 1
+            print(f"{task}: verified code written to {code}")
         else:
-            code = generate_code_from_plan(plan, output_dir=str(out), backend=backend)
-    except Exception as exc:
-        print(f"Code generation failed: {exc}")
-        return False
-    if code and Path(code).exists():
-        print(f"Verified code written to {code}")
-        return True
-    print("Code generation did not produce a verified artifact")
-    return False
+            print(f"{task}: no verified script")
+    return written == len(tasks)
 
 
 def run_autorun_phase(config: Dict[str, Any], args: argparse.Namespace) -> bool:
