@@ -1,9 +1,11 @@
 """Autorun: split by perturbation, generate code per task, run it, and score it.
 
-Splits hold out whole perturbations, never cells, so test and validation
-measure what the paper claims: prediction for perturbations the model has not
-seen. Control cells always stay in training because every prediction is made
-relative to them. Test expression is written for the scorer only.
+Splits follow the paper: perturbation identities, never cells, are divided
+into five folds, and each run tests on one fold, so the score measures
+prediction for perturbations the model has not seen. Validation perturbations
+come from the remaining folds. Control cells always stay in training because
+every prediction is made relative to them. Test expression is written for the
+scorer only.
 """
 
 import json
@@ -38,7 +40,7 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "_", (text or "").strip()).strip("_").lower() or "unknown_dataset"
 
 
-def prepare_split(dataset_file: Path, split_root: Path, test_ratio=0.2, val_ratio=0.1, seed=42) -> Dict[str, Any]:
+def prepare_split(dataset_file: Path, split_root: Path, n_folds=5, fold=0, val_ratio=0.1, seed=42) -> Dict[str, Any]:
     manifest_path = split_root / "split_manifest.json"
     if manifest_path.exists():
         return json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -52,14 +54,16 @@ def prepare_split(dataset_file: Path, split_root: Path, test_ratio=0.2, val_rati
     perturbations = sorted(label for label in labels.unique() if label not in controls)
     if not controls:
         raise ValueError(f"No control cells found in obs['{key}']; predictions need a control profile")
-    if len(perturbations) < 3:
-        raise ValueError(f"Need at least 3 perturbations to split; found {len(perturbations)}")
+    if len(perturbations) < n_folds + 2:
+        raise ValueError(f"Need at least {n_folds + 2} perturbations for {n_folds} folds; found {len(perturbations)}")
+    if not 0 <= fold < n_folds:
+        raise ValueError(f"fold must be in [0, {n_folds}); got {fold}")
 
     random.Random(seed).shuffle(perturbations)
-    n_test = max(1, round(len(perturbations) * test_ratio))
+    test = sorted(perturbations[fold::n_folds])
+    rest = [p for p in perturbations if p not in set(test)]
     n_val = max(1, round(len(perturbations) * val_ratio))
-    test, val = perturbations[:n_test], perturbations[n_test : n_test + n_val]
-    train = perturbations[n_test + n_val :] + controls
+    val, train = sorted(rest[:n_val]), rest[n_val:] + controls
 
     split_root.mkdir(parents=True, exist_ok=True)
     paths = {}
@@ -75,7 +79,8 @@ def prepare_split(dataset_file: Path, split_root: Path, test_ratio=0.2, val_rati
         "n_train_perturbations": len(train) - len(controls),
         "n_val_perturbations": len(val),
         "n_test_perturbations": len(test),
-        "test_ratio": test_ratio,
+        "n_folds": n_folds,
+        "fold": fold,
         "val_ratio": val_ratio,
         "seed": seed,
         "train_h5ad": str(paths["train"]),
@@ -127,7 +132,8 @@ def run_autorun(
     max_tasks: Optional[int] = None,
     executor: str = "local",
     slurm: Optional[Dict[str, Any]] = None,
-    split_test_ratio: float = 0.2,
+    n_folds: int = 5,
+    fold: int = 0,
     split_val_ratio: float = 0.1,
     split_seed: int = 42,
     codegen_backend: str = "codex",
@@ -145,10 +151,10 @@ def run_autorun(
     task_ids = [block["task_id"] for block in plan.get("task_wise_plan", [])] or ["T01"]
     task_ids = task_ids[:max_tasks] if max_tasks else task_ids
 
-    tag = f"test{round(split_test_ratio * 100)}_val{round(split_val_ratio * 100)}_seed{split_seed}"
+    tag = f"fold{fold}of{n_folds}_val{round(split_val_ratio * 100)}_seed{split_seed}"
     split = prepare_split(dataset_file, dataset_file.parent / "splits" / dataset_name / tag,
-                          split_test_ratio, split_val_ratio, split_seed)
-    run_root = data_path("runs", dataset_name, datetime.now().strftime("%Y%m%d_%H%M%S"))
+                          n_folds, fold, split_val_ratio, split_seed)
+    run_root = data_path("runs", dataset_name, f"{datetime.now():%Y%m%d_%H%M%S}_{tag}")
 
     jobs: List[JobRecord] = []
     for task_id in task_ids:

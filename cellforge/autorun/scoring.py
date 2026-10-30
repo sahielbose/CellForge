@@ -1,20 +1,33 @@
-"""Score predictions on held-out perturbations with a fixed, harness-side metric.
+"""Score predictions on held-out perturbations with the paper's metric definitions.
 
 The generated script never sees test expression. It receives the names of the
 held-out perturbations and writes one predicted mean profile per perturbation
-(log1p of counts per 10k). This module compares those profiles with the truth,
-perturbation by perturbation, and scores two reference predictors on the same
-perturbations: no change from control, and the mean shift seen in training.
+(log1p of counts per 10k). Scores are perturbation-centric, as in the paper's
+Methods: per held-out perturbation, compare mean profiles, then average.
+
+The differentially expressed set for a perturbation is the top k genes by the
+absolute t statistic against control cells, with Scanpy's
+``t-test_overestim_var`` convention and k = min(50, p // 2, p - 1) for p genes.
+Recall is Recovery@k (the overlap between the observed set and the k genes with
+the largest predicted change from control, divided by k) and AUROC scores the
+absolute predicted change against membership in the observed set.
+
+Two reference predictors are scored on the same perturbations: no change from
+control, and the mean shift seen across training perturbations.
 """
 
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from scipy.stats import rankdata
 
 from ..dataset import is_control
+
+CONTROL = "__control__"
+Stats = Tuple[np.ndarray, np.ndarray, int]  # mean, variance, number of cells
 
 
 def _dense(matrix) -> np.ndarray:
@@ -27,21 +40,42 @@ def looks_like_counts(matrix) -> bool:
     return bool(values.size) and bool(np.allclose(values, np.round(values)))
 
 
-def group_means(adata, key: str, genes: List[str]) -> Dict[str, np.ndarray]:
-    """Mean log1p(CP10k) profile per label; library size uses all genes, not the subset."""
+def group_stats(adata, key: str, genes: List[str]) -> Dict[str, Stats]:
+    """Mean and variance of log1p(CP10k) per label, with every control label pooled as one group.
+
+    Library size uses all genes, not the scored subset.
+    """
 
     counts = looks_like_counts(adata.X)
     totals = np.asarray(adata.X.sum(axis=1)).ravel()
     sub = adata.X[:, adata.var_names.get_indexer(genes)]
-    labels = adata.obs[key].astype(str).to_numpy()
-    means = {}
+    names, index = np.unique(adata.obs[key].astype(str).to_numpy(), return_inverse=True)
+    labels = np.array([CONTROL if is_control(name) else name for name in names], dtype=object)[index]
+    stats = {}
     for label in np.unique(labels):
         rows = labels == label
         block = _dense(sub[rows])
         if counts:
             block = np.log1p(block / np.maximum(totals[rows, None], 1) * 1e4)
-        means[label] = block.mean(axis=0)
-    return means
+        n = int(rows.sum())
+        stats[label] = (block.mean(axis=0), block.var(axis=0, ddof=1) if n > 1 else np.zeros(block.shape[1]), n)
+    return stats
+
+
+def group_means(adata, key: str, genes: List[str]) -> Dict[str, np.ndarray]:
+    return {label: mean for label, (mean, _, _) in group_stats(adata, key, genes).items()}
+
+
+def n_de_genes(n_genes: int) -> int:
+    return max(1, min(50, n_genes // 2, n_genes - 1))
+
+
+def de_genes(perturbed: Stats, control: Stats, k: int) -> np.ndarray:
+    """Top k genes by |t|; t-test_overestim_var divides both variances by the perturbed group's size."""
+
+    (mp, vp, n), (mc, vc, _) = perturbed, control
+    t = (mp - mc) / np.sqrt((vp + vc) / max(n, 1) + 1e-12)
+    return np.argsort(-np.abs(t), kind="stable")[:k]
 
 
 def _pearson(a: np.ndarray, b: np.ndarray) -> float:
@@ -55,8 +89,19 @@ def _r2(pred: np.ndarray, truth: np.ndarray) -> float:
     return float(1 - ((truth - pred) ** 2).sum() / total) if total > 0 else 0.0
 
 
-def profile_metrics(pred: np.ndarray, truth: np.ndarray, control: np.ndarray, n_de: int = 20) -> Dict[str, float]:
-    de = np.argsort(-np.abs(truth - control))[:n_de]
+def _auroc(score: np.ndarray, positive: np.ndarray) -> float:
+    n_pos, n_neg = int(positive.sum()), int((~positive).sum())
+    if not n_pos or not n_neg:
+        return 0.5
+    ranks = rankdata(score)  # ties get average ranks, so a constant score gives 0.5
+    return float((ranks[positive].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+
+
+def profile_metrics(pred: np.ndarray, truth: np.ndarray, control: np.ndarray, de: np.ndarray) -> Dict[str, float]:
+    change = np.abs(pred - control)
+    positive = np.zeros(len(truth), dtype=bool)
+    positive[de] = True
+    predicted_top = np.argsort(-change, kind="stable")[: len(de)]
     return {
         "MSE": float(((pred - truth) ** 2).mean()),
         "PCC": _pearson(pred, truth),
@@ -65,6 +110,8 @@ def profile_metrics(pred: np.ndarray, truth: np.ndarray, control: np.ndarray, n_
         "MSE_DE": float(((pred[de] - truth[de]) ** 2).mean()),
         "PCC_DE": _pearson(pred[de], truth[de]),
         "R2_DE": _r2(pred[de], truth[de]),
+        "Recall": len(set(predicted_top) & set(de)) / len(de),
+        "AUROC": _auroc(change, positive),
     }
 
 
@@ -73,7 +120,7 @@ def score_predictions(
     test_path: str,
     train_path: str,
     key: str,
-    n_de: int = 20,
+    n_de: Optional[int] = None,
 ) -> Dict[str, object]:
     import anndata as ad
 
@@ -81,39 +128,43 @@ def score_predictions(
     genes = [g for g in pred.var_names if g in set(test.var_names) & set(train.var_names)]
     if not genes:
         raise ValueError("Predictions share no genes with the test set")
-    truth = group_means(test, key, genes)
-    train_means = group_means(train, key, genes)
-    controls = [label for label in train_means if is_control(label)]
-    if not controls:
+    k = n_de or n_de_genes(len(genes))
+    truth = group_stats(test, key, genes)
+    train_stats = group_stats(train, key, genes)
+    if CONTROL not in train_stats:
         raise ValueError("Training split has no control cells to define the baseline profile")
-    control = np.mean([train_means[c] for c in controls], axis=0)
-    shifts = [m - control for label, m in train_means.items() if label not in controls]
+    control = train_stats[CONTROL][0]
+    shifts = [mean - control for label, (mean, _, _) in train_stats.items() if label != CONTROL]
     mean_shift = control + (np.mean(shifts, axis=0) if shifts else 0)
 
     pred_labels = pred.obs[key].astype(str).to_numpy()
     pred_matrix = _dense(pred[:, genes].X)
     rows = {"model": [], "no_change": [], "mean_shift": []}
     missing = []
-    for label, observed in truth.items():
+    for label, stats in truth.items():
+        if label == CONTROL:
+            continue
         hits = np.flatnonzero(pred_labels == label)
         if not len(hits):
             missing.append(label)
             continue
-        rows["model"].append(profile_metrics(pred_matrix[hits[0]], observed, control, n_de))
-        rows["no_change"].append(profile_metrics(control, observed, control, n_de))
-        rows["mean_shift"].append(profile_metrics(mean_shift, observed, control, n_de))
+        de = de_genes(stats, train_stats[CONTROL], k)
+        observed = stats[0]
+        rows["model"].append(profile_metrics(pred_matrix[hits[0]], observed, control, de))
+        rows["no_change"].append(profile_metrics(control, observed, control, de))
+        rows["mean_shift"].append(profile_metrics(mean_shift, observed, control, de))
 
-    def average(entries: List[Dict[str, float]]) -> Dict[str, Optional[float]]:
+    def average(entries: List[Dict[str, float]]) -> Dict[str, float]:
         return {m: float(np.mean([e[m] for e in entries])) for m in entries[0]} if entries else {}
 
     summary = {name: average(entries) for name, entries in rows.items()}
     model, baseline = summary["model"], summary["mean_shift"]
     return {
-        "n_test_perturbations": len(truth),
+        "n_test_perturbations": len(rows["model"]) + len(missing),
         "n_scored": len(rows["model"]),
         "missing_perturbations": missing,
         "n_genes": len(genes),
-        "n_de_genes": n_de,
+        "n_de_genes": k,
         "metrics": summary,
         # a tie within float32 rounding is not a win
         "beats_mean_shift_on_PCC_delta": bool(model and model["PCC_delta"] > baseline["PCC_delta"] + 1e-6),

@@ -1,13 +1,14 @@
 """Tests for the dataset reader, perturbation split, scorer, discussion and refinement."""
 
 import json
+from pathlib import Path
 
 import anndata as ad
 import numpy as np
 import pytest
 
 from cellforge.autorun.runner import prepare_split
-from cellforge.autorun.scoring import group_means, score_predictions
+from cellforge.autorun.scoring import CONTROL, group_means, n_de_genes, score_predictions
 from cellforge.dataset import describe_dataset, infer_task_type, is_control
 from cellforge.Method_Design import generate_research_plan
 from cellforge.Method_Design.discussion import GraphDiscussion
@@ -56,7 +57,7 @@ def test_describe_dataset_reads_metadata_from_file(screen):
 
 
 def test_split_holds_out_whole_perturbations(screen, tmp_path):
-    split = prepare_split(screen, tmp_path / "split", test_ratio=0.2, val_ratio=0.1, seed=1)
+    split = prepare_split(screen, tmp_path / "split", n_folds=5, fold=0, val_ratio=0.1, seed=1)
     groups = {
         name: set(ad.read_h5ad(split[f"{name}_h5ad"]).obs["perturbation"].astype(str))
         for name in ("train", "val", "test")
@@ -69,6 +70,26 @@ def test_split_holds_out_whole_perturbations(screen, tmp_path):
     assert not groups["val"] & groups["test"]
     assert len(groups["test"]) == 2 and len(groups["val"]) == 1
     assert set(json.loads((tmp_path / "split" / "test_perturbations.json").read_text())) == groups["test"]
+
+
+def test_five_folds_test_every_perturbation_once(screen, tmp_path):
+    tested = []
+    for fold in range(5):
+        split = prepare_split(screen, tmp_path / f"fold{fold}", n_folds=5, fold=fold, seed=7)
+        tested += json.loads(Path(split["test_perturbations"]).read_text())
+
+    assert sorted(tested) == sorted(f"GENE{p}" for p in range(10))
+
+
+def test_split_rejects_too_few_perturbations(tmp_path):
+    with pytest.raises(ValueError, match="at least 7 perturbations"):
+        prepare_split(make_screen(tmp_path / "tiny.h5ad", n_perturbations=4), tmp_path / "split")
+
+
+def test_de_set_size_follows_the_paper():
+    assert n_de_genes(2000) == 50
+    assert n_de_genes(40) == 20
+    assert n_de_genes(3) == 1
 
 
 def write_predictions(path, profiles):
@@ -94,7 +115,11 @@ def test_perfect_predictions_beat_the_mean_shift_baseline(screen, tmp_path):
     assert model["PCC"] == pytest.approx(1.0)
     assert model["PCC_delta"] == pytest.approx(1.0)
     assert model["MSE_DE"] == pytest.approx(0.0, abs=1e-8)
+    assert model["Recall"] >= 0.5
+    assert model["AUROC"] > 0.9
+    assert result["n_de_genes"] == 20
     assert result["metrics"]["no_change"]["PCC_delta"] == 0.0
+    assert result["metrics"]["no_change"]["AUROC"] == 0.5
     assert result["beats_mean_shift_on_PCC_delta"]
 
 
@@ -102,7 +127,7 @@ def test_predicting_the_mean_shift_scores_as_the_baseline(screen, tmp_path):
     split = prepare_split(screen, tmp_path / "split", seed=3)
     genes = [f"g{i}" for i in range(N_GENES)]
     train = group_means(ad.read_h5ad(split["train_h5ad"]), "perturbation", genes)
-    control = train.pop("non-targeting")
+    control = train.pop(CONTROL)
     shift = control + np.mean([m - control for m in train.values()], axis=0)
     test_labels = json.loads((tmp_path / "split" / "test_perturbations.json").read_text())
     predictions = write_predictions(tmp_path / "pred.h5ad", {label: shift for label in test_labels})

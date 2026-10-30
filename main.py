@@ -25,7 +25,7 @@ DEFAULT_TASK_DESCRIPTION = """Develop a model that predicts the single-cell gene
 Input: the expression profile of unperturbed control cells and the identity of the perturbation.
 Output: the predicted expression profile after perturbation.
 
-Evaluation: hold out whole perturbations, so the model is tested on perturbations it never saw in training. Report MSE, PCC and R2 over all genes and over the top 20 differentially expressed genes (MSE_DE, PCC_DE, R2_DE), plus PCC on the change from control, and compare against the mean-shift baseline."""
+Evaluation: split perturbation identities into five folds and test on held-out perturbations only, so the model is scored on perturbations it never saw in training. Report MSE, PCC and R2 over all genes and over the top 50 differentially expressed genes (MSE_DE, PCC_DE, R2_DE), DEG recall, and PCC on the change from control, and compare against the no-change and mean-shift baselines."""
 
 LLM_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "LLAMA_API_KEY", "QWEN_API_KEY")
 PHASES = ("task_analysis", "method_design", "code_generation")
@@ -159,7 +159,8 @@ def run_autorun_phase(config: Dict[str, Any], args: argparse.Namespace) -> bool:
             max_tasks=args.max_tasks,
             executor=args.executor,
             slurm=slurm,
-            split_test_ratio=args.split_test_ratio,
+            n_folds=args.folds,
+            fold=args.fold,
             split_val_ratio=args.split_val_ratio,
             split_seed=args.split_seed,
             codegen_backend=args.codegen_backend,
@@ -228,7 +229,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--executor", choices=["local", "slurm"], default="local")
     run.add_argument("--max-tasks", type=int, default=None, help="limit the number of task-wise jobs")
     run.add_argument("--autorun-plan-dir", default=None, help="plan folder override")
-    run.add_argument("--split-test-ratio", type=float, default=0.2, help="share of perturbations held out for test")
+    run.add_argument("--folds", type=int, default=5, help="number of perturbation folds, as in the paper")
+    run.add_argument("--fold", type=int, default=0, help="which fold to hold out for test")
     run.add_argument("--split-val-ratio", type=float, default=0.1, help="share of perturbations held out for validation")
     run.add_argument("--split-seed", type=int, default=42)
     run.add_argument("--partition", default="gpu")
